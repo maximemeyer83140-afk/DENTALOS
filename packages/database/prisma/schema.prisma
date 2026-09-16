@@ -1,0 +1,1762 @@
+// DentalOS Suisse — Initial data model (Phase 0)
+//
+// Design decisions (see /DATABASE.md for the full rationale):
+// - Multi-tenant hierarchy: Organization -> Clinic -> {Users via UserClinicAccess, Practitioners,
+//   Employees, Patients, ...}.
+// - `organizationId` is stored as a denormalized, indexed column on every tenant-scoped table for
+//   fast row-level tenant filtering. Referential integrity to Organization is enforced transitively
+//   through the `clinicId -> Clinic -> Organization` relation and validated at the application/
+//   repository layer (never trust a client-supplied organizationId alone).
+// - Audit-only references (`createdBy`, `updatedBy`, `assignedToUserId`, `uploadedBy`, ...) are
+//   plain indexed string columns holding a User id, WITHOUT a formal Prisma relation. This avoids a
+//   50+ back-relation explosion on the User model while still being queryable and auditable. Real
+//   business relations (Patient, Practitioner, Invoice, ...) use proper relations.
+// - Money is stored as `Decimal @db.Decimal(12, 2)` (never Float). Top-level financial documents
+//   (Invoice, Quote, Payment, CreditNote, Expense, ...) carry an explicit `currency`; line items
+//   inherit the parent document's currency.
+// - Table names are mapped to snake_case (`@@map`) for clean SQL; column names keep Prisma's
+//   camelCase default (a common, low-maintenance convention).
+// - This is the FOUNDATION for the full 90-section product brief, scoped to what Phases 0-2 need
+//   structurally. Fields are intentionally lean (structure over completeness) — extend, don't
+//   rebuild, in later phases.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// CORE / TENANCY
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  defaultLocale Locale   @default(fr)
+  defaultCurrency Currency @default(CHF)
+  timezone      String   @default("Europe/Zurich")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  clinics Clinic[]
+  users   User[]
+
+  @@map("organizations")
+}
+
+model Clinic {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  addressLine1   String?
+  addressLine2   String?
+  npa            String?
+  city           String?
+  canton         String?
+  country        String   @default("CH")
+  phone          String?
+  email          String?
+  timezone       String   @default("Europe/Zurich")
+  currency       Currency @default(CHF)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  bankAccounts     BankAccount[]
+  settings         ClinicSetting[]
+  userAccess       UserClinicAccess[]
+  practitioners    Practitioner[]
+  employees        Employee[]
+  patients         Patient[]
+  rooms            Room[]
+  appointmentTypes AppointmentType[]
+  appointments     Appointment[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@map("clinics")
+}
+
+model BankAccount {
+  id             String   @id @default(cuid())
+  organizationId String
+  clinicId       String
+  label          String
+  iban           String
+  qrIban         String?
+  bic            String?
+  bankName       String?
+  currency       Currency @default(CHF)
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([clinicId])
+  @@map("bank_accounts")
+}
+
+/// Free-form per-clinic configuration (appointment reminder delays, invoice numbering, feature
+/// toggles, ...). Kept as a flexible key/value store instead of dozens of nullable columns.
+model ClinicSetting {
+  id        String   @id @default(cuid())
+  clinicId  String
+  key       String
+  value     Json
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, key])
+  @@map("clinic_settings")
+}
+
+model FeatureFlag {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String
+  isEnabled      Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, key])
+  @@map("feature_flags")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH / RBAC
+// ---------------------------------------------------------------------------
+
+model User {
+  id             String     @id @default(cuid())
+  organizationId String
+  email          String     @unique
+  passwordHash   String?
+  fullName       String
+  locale         Locale     @default(fr)
+  status         UserStatus @default(active)
+  mfaEnabled     Boolean    @default(false)
+  lastLoginAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clinicAccess UserClinicAccess[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+model Role {
+  id             String   @id @default(cuid())
+  organizationId String?
+  name           String
+  isSystem       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  permissions  RolePermission[]
+  clinicAccess UserClinicAccess[]
+
+  @@unique([organizationId, name])
+  @@map("roles")
+}
+
+/// Granular permission keys, e.g. "patients.read", "invoices.validate". Seeded, not user-editable.
+model Permission {
+  id          String @id @default(cuid())
+  key         String @unique
+  category    String
+  description String
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+/// A user's role assignment within one specific clinic (a user may access several clinics with
+/// different roles in each).
+model UserClinicAccess {
+  id        String   @id @default(cuid())
+  userId    String
+  clinicId  String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, clinicId])
+  @@index([clinicId])
+  @@map("user_clinic_access")
+}
+
+/// Append-only trail for sensitive operations. Never updated or deleted.
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  clinicId       String?
+  userId         String?
+  action         String
+  entityType     String
+  entityId       String
+  before         Json?
+  after          Json?
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// PEOPLE
+// ---------------------------------------------------------------------------
+
+model Practitioner {
+  id                 String             @id @default(cuid())
+  organizationId     String
+  clinicId           String
+  userId             String?
+  firstName          String
+  lastName           String
+  specialty          String?
+  gln                String?
+  professionalLicense String?
+  color              String?
+  status             PractitionerStatus @default(active)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  createdBy          String?
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  compensationRules CompensationRule[]
+
+  @@unique([clinicId, firstName, lastName])
+  @@index([organizationId])
+  @@map("practitioners")
+}
+
+model Employee {
+  id             String    @id @default(cuid())
+  organizationId String
+  clinicId       String
+  userId         String?
+  role           String
+  contractType   String?
+  activityRate   Decimal?  @db.Decimal(5, 2)
+  startDate      DateTime?
+  endDate        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  createdBy      String?
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([clinicId])
+  @@map("employees")
+}
+
+// ---------------------------------------------------------------------------
+// PATIENTS
+// ---------------------------------------------------------------------------
+
+model Patient {
+  id                 String           @id @default(cuid())
+  organizationId     String
+  clinicId           String
+  patientNumber      String
+  title              String?
+  firstName          String
+  lastName           String
+  dateOfBirth        DateTime?
+  sex                String?
+  language            Locale?
+  nationality        String?
+  addressLine1       String?
+  addressLine2       String?
+  npa                String?
+  city               String?
+  canton             String?
+  country            String?
+  phone              String?
+  mobile             String?
+  email              String?
+  legalGuardianName  String?
+  referringPhysician String?
+  referringDentist   String?
+  acquisitionSource  AcquisitionSource @default(other)
+  status             PatientStatus    @default(active)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  createdBy          String?
+
+  clinic         Clinic                  @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  medicalProfile PatientMedicalProfile?
+  medicalAlerts  MedicalAlert[]
+  insurances     PatientInsurance[]
+  appointments   Appointment[]
+  clinicalNotes  ClinicalNote[]
+  dentalCharts   DentalChart[]
+  periodontalCharts PeriodontalChart[]
+  treatmentPlans TreatmentPlan[]
+  treatments     Treatment[]
+  quotes         Quote[]
+  invoices       Invoice[]
+  payments       Payment[]
+  recalls        Recall[]
+  communications Communication[]
+  consents       Consent[]
+  documents      Document[]
+  labCases       LabCase[]
+
+  @@unique([clinicId, patientNumber])
+  @@index([organizationId])
+  @@index([clinicId, lastName, firstName])
+  @@map("patients")
+}
+
+/// Structured, versioned medical questionnaire. A new version is written on every material change;
+/// never overwritten silently (see MedicalProfileRevision).
+model PatientMedicalProfile {
+  id             String   @id @default(cuid())
+  patientId      String   @unique
+  allergies      String[]
+  medications    String[]
+  conditions     String[]
+  isPregnant     Boolean?
+  isSmoker       Boolean?
+  onAnticoagulants Boolean?
+  riskNotes      String?
+  version        Int      @default(1)
+  updatedAt      DateTime @updatedAt
+  updatedBy      String?
+
+  patient   Patient                   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  revisions PatientMedicalProfileRevision[]
+
+  @@map("patient_medical_profiles")
+}
+
+model PatientMedicalProfileRevision {
+  id           String   @id @default(cuid())
+  profileId    String
+  snapshot     Json
+  version      Int
+  recordedAt   DateTime @default(now())
+  recordedBy   String?
+
+  profile PatientMedicalProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("patient_medical_profile_revisions")
+}
+
+/// Denormalized, always-visible banner alerts (allergy, anticoagulants, ...) surfaced immediately
+/// on the patient record, independent of the full medical profile.
+model MedicalAlert {
+  id        String            @id @default(cuid())
+  patientId String
+  type      MedicalAlertType
+  label     String
+  severity  MedicalAlertSeverity @default(warning)
+  isActive  Boolean           @default(true)
+  createdAt DateTime          @default(now())
+  createdBy String?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("medical_alerts")
+}
+
+model Payer {
+  id             String    @id @default(cuid())
+  organizationId String
+  type           PayerType
+  name           String
+  contactInfo    Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  insurances PatientInsurance[]
+  invoices   Invoice[]
+  payments   Payment[]
+
+  @@index([organizationId])
+  @@map("payers")
+}
+
+model PatientInsurance {
+  id             String    @id @default(cuid())
+  patientId      String
+  payerId        String
+  policyNumber   String?
+  insuredNumber  String?
+  coverageType   InsuranceCoverageType @default(other)
+  validFrom      DateTime?
+  validTo        DateTime?
+  isPrimary      Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  payer   Payer   @relation(fields: [payerId], references: [id], onDelete: Restrict)
+
+  @@index([patientId])
+  @@map("patient_insurances")
+}
+
+// ---------------------------------------------------------------------------
+// AGENDA
+// ---------------------------------------------------------------------------
+
+model Room {
+  id       String  @id @default(cuid())
+  clinicId String
+  name     String
+  isActive Boolean @default(true)
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([clinicId])
+  @@map("rooms")
+}
+
+model AppointmentType {
+  id                    String   @id @default(cuid())
+  clinicId              String
+  name                  String
+  defaultDurationMinutes Int
+  color                 String?
+  instructions          String?
+  defaultPrice          Decimal? @db.Decimal(12, 2)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([clinicId])
+  @@map("appointment_types")
+}
+
+model Appointment {
+  id                String            @id @default(cuid())
+  organizationId    String
+  clinicId          String
+  patientId         String?
+  practitionerId    String
+  roomId            String?
+  appointmentTypeId String?
+  startAt           DateTime
+  endAt             DateTime
+  status            AppointmentStatus @default(scheduled)
+  notes             String?
+  source            String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  createdBy         String?
+
+  clinic          Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient         Patient?         @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  room            Room?            @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  appointmentType AppointmentType? @relation(fields: [appointmentTypeId], references: [id], onDelete: SetNull)
+
+  clinicalNotes ClinicalNote[]
+  treatments    Treatment[]
+
+  @@index([organizationId])
+  @@index([clinicId, startAt])
+  @@index([practitionerId, startAt])
+  @@index([roomId, startAt])
+  @@map("appointments")
+}
+
+model WaitingListEntry {
+  id                     String              @id @default(cuid())
+  organizationId         String
+  clinicId               String
+  patientId              String
+  appointmentTypeId      String?
+  preferredPractitionerId String?
+  desiredDurationMinutes Int?
+  urgency                WaitingListUrgency  @default(normal)
+  availabilityNotes      String?
+  status                 WaitingListStatus   @default(waiting)
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@index([clinicId, status])
+  @@map("waiting_list_entries")
+}
+
+// ---------------------------------------------------------------------------
+// CLINICAL
+// ---------------------------------------------------------------------------
+
+model ClinicalNote {
+  id             String   @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  practitionerId String
+  appointmentId  String?
+  noteType       String   @default("consultation")
+  content        String
+  isFinalized    Boolean  @default(false)
+  finalizedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      String?
+
+  patient     Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  revisions   ClinicalNoteRevision[]
+
+  @@index([organizationId])
+  @@index([patientId, createdAt])
+  @@map("clinical_notes")
+}
+
+/// A finalized note is never overwritten in place: corrections are appended here and the note
+/// keeps pointing at its latest content, preserving the full editing history.
+model ClinicalNoteRevision {
+  id             String   @id @default(cuid())
+  clinicalNoteId String
+  content        String
+  reason         String?
+  editedAt       DateTime @default(now())
+  editedBy       String?
+
+  clinicalNote ClinicalNote @relation(fields: [clinicalNoteId], references: [id], onDelete: Cascade)
+
+  @@index([clinicalNoteId])
+  @@map("clinical_note_revisions")
+}
+
+/// One snapshot of the full-mouth dental chart as of a given date (FDI numbering). Historical
+/// snapshots are kept so the chart can be viewed as of any prior date.
+model DentalChart {
+  id        String   @id @default(cuid())
+  patientId String
+  asOfDate  DateTime @default(now())
+  isCurrent Boolean  @default(true)
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  patient Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  entries DentalChartEntry[]
+
+  @@index([patientId, asOfDate])
+  @@map("dental_charts")
+}
+
+model DentalChartEntry {
+  id            String  @id @default(cuid())
+  dentalChartId String
+  toothNumber   Int
+  surface       String?
+  condition     DentalConditionType
+  notes         String?
+
+  dentalChart DentalChart @relation(fields: [dentalChartId], references: [id], onDelete: Cascade)
+
+  @@index([dentalChartId, toothNumber])
+  @@map("dental_chart_entries")
+}
+
+model PeriodontalChart {
+  id             String   @id @default(cuid())
+  patientId      String
+  practitionerId String
+  examDate       DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  patient      Patient                  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  measurements PeriodontalMeasurement[]
+
+  @@index([patientId, examDate])
+  @@map("periodontal_charts")
+}
+
+model PeriodontalMeasurement {
+  id                 String  @id @default(cuid())
+  periodontalChartId String
+  toothNumber        Int
+  site               String
+  probingDepthMm      Int?
+  recessionMm         Int?
+  bleeding           Boolean @default(false)
+  plaque             Boolean @default(false)
+  mobility           Int?
+  furcation          Int?
+
+  periodontalChart PeriodontalChart @relation(fields: [periodontalChartId], references: [id], onDelete: Cascade)
+
+  @@index([periodontalChartId, toothNumber])
+  @@map("periodontal_measurements")
+}
+
+model TreatmentPlan {
+  id             String            @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  practitionerId String
+  title          String?
+  status         TreatmentPlanStatus @default(draft)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  createdBy      String?
+
+  patient Patient                @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  options TreatmentPlanOption[]
+
+  @@index([organizationId])
+  @@index([patientId])
+  @@map("treatment_plans")
+}
+
+/// A plan may offer several mutually-exclusive scenarios ("Option A: implant", "Option B: bridge").
+model TreatmentPlanOption {
+  id              String  @id @default(cuid())
+  treatmentPlanId String
+  label           String
+  description     String?
+  isSelected      Boolean @default(false)
+
+  treatmentPlan TreatmentPlan          @relation(fields: [treatmentPlanId], references: [id], onDelete: Cascade)
+  items         TreatmentPlanItem[]
+
+  @@index([treatmentPlanId])
+  @@map("treatment_plan_options")
+}
+
+model TreatmentPlanItem {
+  id                     String   @id @default(cuid())
+  treatmentPlanOptionId  String
+  tariffItemId           String?
+  practitionerId         String?
+  toothNumber            Int?
+  description            String
+  quantity               Int      @default(1)
+  unitPrice              Decimal  @db.Decimal(12, 2)
+  sequence               Int      @default(0)
+  sessionNumber          Int?
+  status                 TreatmentPlanItemStatus @default(planned)
+
+  treatmentPlanOption TreatmentPlanOption @relation(fields: [treatmentPlanOptionId], references: [id], onDelete: Cascade)
+  tariffItem          TariffItem?         @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
+  treatments          Treatment[]
+
+  @@index([treatmentPlanOptionId])
+  @@map("treatment_plan_items")
+}
+
+/// An actually performed clinical act (as opposed to a planned TreatmentPlanItem).
+model Treatment {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  clinicId            String
+  patientId           String
+  practitionerId      String
+  treatmentPlanItemId String?
+  appointmentId       String?
+  tariffItemId        String?
+  toothNumber         Int?
+  description         String
+  quantity            Int      @default(1)
+  unitPrice           Decimal  @db.Decimal(12, 2)
+  performedAt         DateTime @default(now())
+  status              TreatmentStatus @default(completed)
+  createdAt           DateTime @default(now())
+  createdBy           String?
+
+  patient           Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  appointment       Appointment?       @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  treatmentPlanItem TreatmentPlanItem? @relation(fields: [treatmentPlanItemId], references: [id], onDelete: SetNull)
+  tariffItem        TariffItem?        @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
+  invoiceItems      InvoiceItem[]
+
+  @@index([organizationId])
+  @@index([patientId])
+  @@index([practitionerId, performedAt])
+  @@map("treatments")
+}
+
+// ---------------------------------------------------------------------------
+// QUOTES
+// ---------------------------------------------------------------------------
+
+model Quote {
+  id              String      @id @default(cuid())
+  organizationId  String
+  clinicId        String
+  patientId       String
+  practitionerId  String
+  treatmentPlanId String?
+  quoteNumber     String
+  status          QuoteStatus @default(draft)
+  validUntil      DateTime?
+  subtotal        Decimal     @db.Decimal(12, 2)
+  taxTotal        Decimal     @default(0) @db.Decimal(12, 2)
+  total           Decimal     @db.Decimal(12, 2)
+  currency        Currency    @default(CHF)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  createdBy       String?
+
+  patient Patient     @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  items   QuoteItem[]
+
+  @@unique([clinicId, quoteNumber])
+  @@index([organizationId])
+  @@index([patientId])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id           String  @id @default(cuid())
+  quoteId      String
+  description  String
+  tariffItemId String?
+  toothNumber  Int?
+  quantity     Int     @default(1)
+  unitPrice    Decimal @db.Decimal(12, 2)
+  lineTotal    Decimal @db.Decimal(12, 2)
+
+  quote      Quote       @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  tariffItem TariffItem? @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+  @@map("quote_items")
+}
+
+// ---------------------------------------------------------------------------
+// SWISS TARIFF ENGINE — never hardcode tariffs in business logic; model them as versioned data.
+// ---------------------------------------------------------------------------
+
+model TariffCatalog {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  system         String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  versions TariffVersion[]
+
+  @@index([organizationId])
+  @@map("tariff_catalogs")
+}
+
+model TariffVersion {
+  id              String   @id @default(cuid())
+  tariffCatalogId String
+  versionLabel    String
+  validFrom       DateTime
+  validTo         DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  catalog TariffCatalog @relation(fields: [tariffCatalogId], references: [id], onDelete: Cascade)
+  items   TariffItem[]
+  rules   TariffRule[]
+
+  @@index([tariffCatalogId])
+  @@map("tariff_versions")
+}
+
+model TariffItem {
+  id                   String   @id @default(cuid())
+  tariffVersionId      String
+  code                 String
+  description          String
+  category             String?
+  points               Decimal? @db.Decimal(10, 3)
+  pointValue           Decimal? @db.Decimal(10, 4)
+  defaultQuantity      Int      @default(1)
+  manualPriceAllowed   Boolean  @default(false)
+  computedPrice        Decimal? @db.Decimal(12, 2)
+
+  tariffVersion       TariffVersion         @relation(fields: [tariffVersionId], references: [id], onDelete: Cascade)
+  treatmentPlanItems  TreatmentPlanItem[]
+  treatments          Treatment[]
+  quoteItems          QuoteItem[]
+  invoiceItems        InvoiceItem[]
+
+  @@unique([tariffVersionId, code])
+  @@map("tariff_items")
+}
+
+model TariffRule {
+  id              String  @id @default(cuid())
+  tariffVersionId String
+  ruleType        String
+  config          Json
+  description     String?
+
+  tariffVersion TariffVersion @relation(fields: [tariffVersionId], references: [id], onDelete: Cascade)
+
+  @@index([tariffVersionId])
+  @@map("tariff_rules")
+}
+
+// ---------------------------------------------------------------------------
+// BILLING
+// ---------------------------------------------------------------------------
+
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  payerId        String?
+  practitionerId String
+  invoiceNumber  String
+  status         InvoiceStatus @default(draft)
+  issueDate      DateTime?
+  dueDate        DateTime?
+  subtotal       Decimal       @db.Decimal(12, 2)
+  taxTotal       Decimal       @default(0) @db.Decimal(12, 2)
+  total          Decimal       @db.Decimal(12, 2)
+  amountPaid     Decimal       @default(0) @db.Decimal(12, 2)
+  balance        Decimal       @db.Decimal(12, 2)
+  currency       Currency      @default(CHF)
+  validatedAt    DateTime?
+  validatedBy    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  createdBy      String?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  payer   Payer?  @relation(fields: [payerId], references: [id], onDelete: SetNull)
+
+  items              InvoiceItem[]
+  creditNotes        CreditNote[]
+  paymentAllocations PaymentAllocation[]
+  reminders          PaymentReminder[]
+
+  @@unique([clinicId, invoiceNumber])
+  @@index([organizationId])
+  @@index([clinicId, status])
+  @@index([patientId])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id           String  @id @default(cuid())
+  invoiceId    String
+  description  String
+  tariffItemId String?
+  treatmentId  String?
+  toothNumber  Int?
+  quantity     Int     @default(1)
+  unitPrice    Decimal @db.Decimal(12, 2)
+  lineTotal    Decimal @db.Decimal(12, 2)
+
+  invoice    Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tariffItem TariffItem? @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
+  treatment  Treatment?  @relation(fields: [treatmentId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+model CreditNote {
+  id             String   @id @default(cuid())
+  organizationId String
+  clinicId       String
+  invoiceId      String
+  creditNoteNumber String
+  reason         String?
+  amount         Decimal  @db.Decimal(12, 2)
+  currency       Currency @default(CHF)
+  issueDate      DateTime @default(now())
+  createdAt      DateTime @default(now())
+  createdBy      String?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([clinicId, creditNoteNumber])
+  @@index([invoiceId])
+  @@map("credit_notes")
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  payerId        String?
+  amount         Decimal       @db.Decimal(12, 2)
+  currency       Currency      @default(CHF)
+  method         PaymentMethod
+  status         PaymentStatus @default(completed)
+  reference      String?
+  paidAt         DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+  createdBy      String?
+
+  patient     Patient             @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  payer       Payer?              @relation(fields: [payerId], references: [id], onDelete: SetNull)
+  allocations PaymentAllocation[]
+
+  @@index([organizationId])
+  @@index([clinicId, paidAt])
+  @@index([patientId])
+  @@map("payments")
+}
+
+/// A single payment can be split across several invoices (or an invoice paid via several
+/// payments); this join table is the source of truth for `Invoice.amountPaid`.
+model PaymentAllocation {
+  id        String  @id @default(cuid())
+  paymentId String
+  invoiceId String
+  amount    Decimal @db.Decimal(12, 2)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@index([invoiceId])
+  @@map("payment_allocations")
+}
+
+model PaymentReminder {
+  id           String        @id @default(cuid())
+  invoiceId    String
+  level        ReminderLevel
+  fee          Decimal?      @db.Decimal(12, 2)
+  interest     Decimal?      @db.Decimal(12, 2)
+  documentUrl  String?
+  sentAt       DateTime?
+  createdAt    DateTime      @default(now())
+  createdBy    String?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("payment_reminders")
+}
+
+// ---------------------------------------------------------------------------
+// RECALL / COMMUNICATION
+// ---------------------------------------------------------------------------
+
+model Recall {
+  id             String       @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  dueDate        DateTime
+  reason         String?
+  status         RecallStatus @default(to_contact)
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId, status, dueDate])
+  @@map("recalls")
+}
+
+model CommunicationTemplate {
+  id       String  @id @default(cuid())
+  clinicId String
+  key      String
+  channel  CommunicationChannel
+  locale   Locale
+  subject  String?
+  body     String
+
+  @@unique([clinicId, key, locale])
+  @@map("communication_templates")
+}
+
+model Communication {
+  id             String                @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  channel        CommunicationChannel
+  direction      CommunicationDirection @default(outbound)
+  subject        String?
+  content        String?
+  status         String?
+  relatedEntityType String?
+  relatedEntityId   String?
+  sentAt         DateTime?
+  createdAt      DateTime              @default(now())
+  createdBy      String?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, createdAt])
+  @@map("communications")
+}
+
+model Consent {
+  id             String        @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  templateKey    String
+  version        Int           @default(1)
+  status         ConsentStatus @default(pending)
+  signedAt       DateTime?
+  signedByName   String?
+  documentId     String?
+  createdAt      DateTime      @default(now())
+  createdBy      String?
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("consents")
+}
+
+model Document {
+  id             String          @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String?
+  category       DocumentCategory
+  fileName       String
+  storageKey     String
+  mimeType       String
+  sizeBytes      Int
+  contentHash    String?
+  version        Int             @default(1)
+  createdAt      DateTime        @default(now())
+  createdBy      String?
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([patientId])
+  @@map("documents")
+}
+
+model Task {
+  id              String       @id @default(cuid())
+  organizationId  String
+  clinicId        String
+  title           String
+  description     String?
+  patientId       String?
+  assignedToUserId String?
+  priority        TaskPriority @default(normal)
+  dueAt           DateTime?
+  status          TaskStatus   @default(open)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  createdBy       String?
+
+  @@index([clinicId, status])
+  @@index([assignedToUserId])
+  @@map("tasks")
+}
+
+model Notification {
+  id                String   @id @default(cuid())
+  organizationId    String
+  userId            String
+  type              String
+  title             String
+  body              String?
+  isRead            Boolean  @default(false)
+  relatedEntityType String?
+  relatedEntityId   String?
+  createdAt         DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// INVENTORY
+// ---------------------------------------------------------------------------
+
+model Supplier {
+  id                  String   @id @default(cuid())
+  organizationId      String
+  name                String
+  addressLine1        String?
+  city                String?
+  country             String?
+  phone               String?
+  email               String?
+  contactName         String?
+  paymentTerms        String?
+  averageLeadTimeDays Int?
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  inventoryItems InventoryItem[]
+  purchaseOrders PurchaseOrder[]
+
+  @@index([organizationId])
+  @@map("suppliers")
+}
+
+model InventoryItem {
+  id               String                @id @default(cuid())
+  organizationId   String
+  clinicId         String
+  sku              String
+  name             String
+  category         InventoryItemCategory
+  supplierId       String?
+  supplierRef      String?
+  unit             String                @default("piece")
+  costPrice        Decimal               @db.Decimal(12, 2)
+  salePrice        Decimal?              @db.Decimal(12, 2)
+  reorderThreshold Int                   @default(0)
+  locationLabel    String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  supplier  Supplier?           @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  lots      InventoryLot[]
+  movements InventoryMovement[]
+  purchaseOrderItems PurchaseOrderItem[]
+
+  @@unique([clinicId, sku])
+  @@index([organizationId])
+  @@map("inventory_items")
+}
+
+model InventoryLot {
+  id              String    @id @default(cuid())
+  inventoryItemId String
+  lotNumber       String
+  quantity        Decimal   @db.Decimal(12, 3)
+  receivedAt      DateTime  @default(now())
+  expiresAt       DateTime?
+  supplierId      String?
+
+  inventoryItem InventoryItem       @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  movements     InventoryMovement[]
+
+  @@index([inventoryItemId, expiresAt])
+  @@map("inventory_lots")
+}
+
+model InventoryMovement {
+  id                String               @id @default(cuid())
+  inventoryItemId   String
+  lotId             String?
+  type              InventoryMovementType
+  quantity          Decimal              @db.Decimal(12, 3)
+  reason            String?
+  relatedPatientId  String?
+  relatedTreatmentId String?
+  createdAt         DateTime             @default(now())
+  createdBy         String?
+
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  lot           InventoryLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
+
+  @@index([inventoryItemId, createdAt])
+  @@map("inventory_movements")
+}
+
+model PurchaseOrder {
+  id             String              @id @default(cuid())
+  organizationId String
+  clinicId       String
+  supplierId     String
+  orderNumber    String
+  status         PurchaseOrderStatus @default(draft)
+  expectedAt     DateTime?
+  createdAt      DateTime            @default(now())
+  createdBy      String?
+
+  supplier Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items    PurchaseOrderItem[]
+
+  @@unique([clinicId, orderNumber])
+  @@index([organizationId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id                String  @id @default(cuid())
+  purchaseOrderId   String
+  inventoryItemId   String
+  quantityOrdered   Decimal @db.Decimal(12, 3)
+  quantityReceived  Decimal @default(0) @db.Decimal(12, 3)
+  unitCost          Decimal @db.Decimal(12, 2)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+// ---------------------------------------------------------------------------
+// FINANCE
+// ---------------------------------------------------------------------------
+
+model Expense {
+  id                   String          @id @default(cuid())
+  organizationId       String
+  clinicId             String
+  supplierId           String?
+  category             ExpenseCategory
+  amount               Decimal         @db.Decimal(12, 2)
+  currency             Currency        @default(CHF)
+  taxAmount            Decimal?        @db.Decimal(12, 2)
+  date                 DateTime
+  attachmentDocumentId String?
+  recurringExpenseId   String?
+  notes                String?
+  createdAt            DateTime        @default(now())
+  createdBy            String?
+
+  recurringExpense RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([clinicId, date])
+  @@map("expenses")
+}
+
+model RecurringExpense {
+  id             String            @id @default(cuid())
+  organizationId String
+  clinicId       String
+  category       ExpenseCategory
+  label          String
+  amount         Decimal           @db.Decimal(12, 2)
+  currency       Currency          @default(CHF)
+  intervalUnit   RecurrenceInterval @default(monthly)
+  dayOfMonth     Int?
+  nextRunAt      DateTime
+  isActive       Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  createdBy      String?
+
+  expenses Expense[]
+
+  @@index([clinicId, isActive])
+  @@map("recurring_expenses")
+}
+
+model Laboratory {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  addressLine1   String?
+  phone          String?
+  email          String?
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  labCases LabCase[]
+
+  @@index([organizationId])
+  @@map("laboratories")
+}
+
+model LabCase {
+  id             String        @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  practitionerId String
+  laboratoryId   String
+  toothNumber    Int?
+  workType       String
+  status         LabCaseStatus @default(to_send)
+  sentAt         DateTime?
+  expectedAt     DateTime?
+  receivedAt     DateTime?
+  cost           Decimal?      @db.Decimal(12, 2)
+  trackingRef    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  patient    Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  laboratory Laboratory @relation(fields: [laboratoryId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([clinicId, status])
+  @@map("lab_cases")
+}
+
+model CompensationRule {
+  id             String            @id @default(cuid())
+  organizationId String
+  clinicId       String
+  practitionerId String
+  model          CompensationModel
+  rate           Decimal?          @db.Decimal(6, 3)
+  config         Json?
+  validFrom      DateTime
+  validTo        DateTime?
+  createdAt      DateTime          @default(now())
+  createdBy      String?
+
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  @@index([practitionerId, validFrom])
+  @@map("compensation_rules")
+}
+
+model CompensationStatement {
+  id             String   @id @default(cuid())
+  organizationId String
+  clinicId       String
+  practitionerId String
+  periodStart    DateTime
+  periodEnd      DateTime
+  production     Decimal  @db.Decimal(12, 2)
+  billed         Decimal  @db.Decimal(12, 2)
+  collected      Decimal  @db.Decimal(12, 2)
+  creditNotes    Decimal  @default(0) @db.Decimal(12, 2)
+  baseAmount     Decimal  @db.Decimal(12, 2)
+  rateApplied    Decimal  @db.Decimal(6, 3)
+  computedAmount Decimal  @db.Decimal(12, 2)
+  adjustments    Decimal  @default(0) @db.Decimal(12, 2)
+  finalAmount    Decimal  @db.Decimal(12, 2)
+  status         CompensationStatementStatus @default(draft)
+  generatedAt    DateTime @default(now())
+  generatedBy    String?
+  notes          String?
+
+  @@index([practitionerId, periodStart])
+  @@map("compensation_statements")
+}
+
+// ---------------------------------------------------------------------------
+// ANALYTICS / GOALS
+// ---------------------------------------------------------------------------
+
+model Goal {
+  id             String     @id @default(cuid())
+  organizationId String
+  clinicId       String
+  metric         String
+  periodType     GoalPeriod @default(month)
+  periodStart    DateTime
+  targetValue    Decimal    @db.Decimal(14, 2)
+  createdAt      DateTime   @default(now())
+  createdBy      String?
+
+  @@index([clinicId, metric, periodStart])
+  @@map("goals")
+}
+
+// ---------------------------------------------------------------------------
+// AUTOMATION / INTEGRATIONS (structural placeholders for later phases)
+// ---------------------------------------------------------------------------
+
+model AutomationRule {
+  id             String   @id @default(cuid())
+  organizationId String
+  clinicId       String
+  name           String
+  triggerEvent   String
+  conditions     Json?
+  actions        Json
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  createdBy      String?
+
+  @@index([clinicId, triggerEvent])
+  @@map("automation_rules")
+}
+
+model WebhookEndpoint {
+  id                String   @id @default(cuid())
+  organizationId     String
+  url               String
+  secret            String
+  subscribedEvents  String[]
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+
+  deliveries WebhookDelivery[]
+
+  @@index([organizationId])
+  @@map("webhook_endpoints")
+}
+
+model WebhookDelivery {
+  id                String                @id @default(cuid())
+  webhookEndpointId String
+  eventType         String
+  payload           Json
+  status            WebhookDeliveryStatus @default(pending)
+  attempts          Int                   @default(0)
+  lastAttemptAt     DateTime?
+  createdAt         DateTime              @default(now())
+
+  webhookEndpoint WebhookEndpoint @relation(fields: [webhookEndpointId], references: [id], onDelete: Cascade)
+
+  @@index([webhookEndpointId, status])
+  @@map("webhook_deliveries")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum Locale {
+  fr
+  de
+  it
+  en
+}
+
+enum Currency {
+  CHF
+  EUR
+}
+
+enum UserStatus {
+  active
+  invited
+  suspended
+  disabled
+}
+
+enum PractitionerStatus {
+  active
+  inactive
+}
+
+enum AcquisitionSource {
+  google
+  referral
+  instagram
+  physician
+  other_practitioner
+  advertising
+  other
+}
+
+enum PatientStatus {
+  active
+  inactive
+  archived
+}
+
+enum MedicalAlertType {
+  allergy
+  medication
+  condition
+  other
+}
+
+enum MedicalAlertSeverity {
+  info
+  warning
+  critical
+}
+
+enum PayerType {
+  patient
+  insurance
+  third_party
+  social_insurance
+  other
+}
+
+enum InsuranceCoverageType {
+  accident
+  illness
+  social
+  private
+  other
+}
+
+enum AppointmentStatus {
+  scheduled
+  confirmed
+  arrived
+  in_chair
+  completed
+  cancelled
+  no_show
+}
+
+enum WaitingListUrgency {
+  low
+  normal
+  high
+  urgent
+}
+
+enum WaitingListStatus {
+  waiting
+  offered
+  scheduled
+  cancelled
+}
+
+enum DentalConditionType {
+  healthy
+  missing
+  caries
+  composite
+  amalgam
+  crown
+  bridge
+  implant
+  planned_extraction
+  endodontics
+  lesion
+  veneer
+  inlay
+  onlay
+  provisional
+}
+
+enum TreatmentPlanStatus {
+  draft
+  presented
+  accepted
+  partially_accepted
+  rejected
+  in_progress
+  completed
+  cancelled
+}
+
+enum TreatmentPlanItemStatus {
+  planned
+  accepted
+  rejected
+  in_progress
+  completed
+  cancelled
+}
+
+enum TreatmentStatus {
+  planned
+  completed
+  cancelled
+}
+
+enum QuoteStatus {
+  draft
+  sent
+  accepted
+  rejected
+  expired
+}
+
+enum InvoiceStatus {
+  draft
+  issued
+  partially_paid
+  paid
+  overdue
+  cancelled
+  credited
+}
+
+enum PaymentMethod {
+  cash
+  card
+  twint
+  bank_transfer
+  qr_bill
+  other
+}
+
+enum PaymentStatus {
+  pending
+  completed
+  refunded
+  failed
+}
+
+enum ReminderLevel {
+  reminder_1
+  reminder_2
+  final_reminder
+}
+
+enum RecallStatus {
+  to_contact
+  contacted
+  scheduled
+  no_response
+  declined
+}
+
+enum CommunicationChannel {
+  email
+  sms
+  call
+  letter
+  note
+}
+
+enum CommunicationDirection {
+  inbound
+  outbound
+}
+
+enum ConsentStatus {
+  pending
+  signed
+  declined
+  expired
+}
+
+enum DocumentCategory {
+  radiograph
+  photograph
+  consent
+  quote
+  invoice
+  prescription
+  letter
+  insurance
+  laboratory
+  other
+}
+
+enum TaskPriority {
+  low
+  normal
+  high
+  urgent
+}
+
+enum TaskStatus {
+  open
+  in_progress
+  done
+  cancelled
+}
+
+enum InventoryItemCategory {
+  composites
+  adhesives
+  anesthetics
+  needles
+  gloves
+  masks
+  burs
+  implants
+  sutures
+  disinfection
+  consumables
+  laboratory
+  other
+}
+
+enum InventoryMovementType {
+  receipt
+  consumption
+  adjustment
+  transfer
+}
+
+enum PurchaseOrderStatus {
+  draft
+  sent
+  partially_received
+  received
+  cancelled
+}
+
+enum ExpenseCategory {
+  rent
+  salaries
+  laboratory
+  equipment
+  consumables
+  insurance
+  software
+  marketing
+  telecom
+  utilities
+  training
+  maintenance
+  accounting
+  banking
+  other
+}
+
+enum RecurrenceInterval {
+  monthly
+  quarterly
+  yearly
+}
+
+enum LabCaseStatus {
+  to_send
+  sent
+  in_production
+  received
+  fitted
+  completed
+}
+
+enum CompensationModel {
+  salary
+  percentage_revenue
+  percentage_collected
+  percentage_production
+  hybrid
+}
+
+enum CompensationStatementStatus {
+  draft
+  validated
+  paid
+}
+
+enum GoalPeriod {
+  month
+  year
+}
+
+enum WebhookDeliveryStatus {
+  pending
+  delivered
+  failed
+}

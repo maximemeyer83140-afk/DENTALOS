@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js
+.next/
+out/
+
+# Build output
+dist/
+build/
+
+# Env files — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# Prisma
+packages/database/prisma/generated/
+
+# Testing / coverage
+coverage/
+.vitest/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editors / OS
+.DS_Store
+.idea/
+*.swp
+
+# Misc
+.turbo/
+next-env.d.ts
+tsconfig.tsbuildinfo
