@@ -11,18 +11,24 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@auth/prisma-adapter": "^2.7.4",
     "@dentalos/database": "workspace:*",
+    "bcryptjs": "^2.4.3",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "next": "^15.1.0",
+    "next-auth": "5.0.0-beta.25",
+    "otplib": "^12.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^2.5.5"
+    "tailwind-merge": "^2.5.5",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@dentalos/config": "workspace:*",
     "@eslint/eslintrc": "^3.2.0",
     "@testing-library/react": "^16.1.0",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",

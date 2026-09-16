@@ -42,8 +42,9 @@ libre — évite des dizaines de colonnes nullable), `FeatureFlag`.
 *utilisateur × clinique × rôle* — un utilisateur peut avoir des rôles différents selon la
 clinique), `AuditLog` (append-only, jamais modifié ni supprimé par l'application).
 
-> Pas de tables de session/compte d'authentification pour l'instant — dépend de la décision D1
-> (ARCHITECTURE.md §9). Elles seront ajoutées avec le fournisseur choisi en Phase 1.
+`Account`, `Session`, `VerificationToken` (Phase 1) suivent le schéma standard Auth.js/adaptateur
+Prisma — ajoutés dès maintenant même si `Account` reste inutilisé tant qu'aucun provider OAuth/SSO
+n'est branché, pour que l'ajout d'un SSO plus tard soit une config, pas une migration.
 
 ### Personnes
 
@@ -132,9 +133,8 @@ moteur d'exécution réel en Phase 9.
   encore écrit) mais c'est une règle non négociable pour toute écriture financière à partir de la
   Phase 5.
 
-## 4. Ce qui n'est délibérément pas modélisé en Phase 0
+## 4. Ce qui n'est délibérément pas modélisé
 
-- Tables d'authentification (dépend de D1).
 - Détail fin de l'imagerie/DICOM (section 39) — `Document` suffit pour le lien vers un système
   externe pour l'instant.
 - Granularité complète des 6 sites parodontaux par dent normalisés en enum (actuellement

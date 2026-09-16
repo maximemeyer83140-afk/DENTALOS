@@ -149,10 +149,10 @@ une interface définie dans le module qui en a besoin, avec une implémentation 
 Ces décisions ont un impact structurant ; elles doivent être tranchées explicitement au plus tard
 en début de Phase 1, pas laissées implicites.
 
-1. **Authentification** : Auth.js (NextAuth) vs. solution maison vs. fournisseur managé
-   (ex. Clerk/WorkOS). Impacte le schéma (tables de session), MFA, et le modèle de coût. Le schéma
-   Phase 0 ne modélise **pas** encore de tables de session/compte pour rester neutre vis-à-vis de
-   ce choix.
+1. ~~**Authentification**~~ — **Tranchée en Phase 1** : Auth.js (NextAuth) v5, provider
+   Credentials, sessions base de données (révocables), MFA TOTP. Voir
+   `docs/phases/PHASE_1.md`. Dette connue : le secret TOTP (`User.mfaSecret`) est stocké en clair
+   en Phase 1, à chiffrer avant toute donnée réelle (`SECURITY.md`).
 2. **Multi-organisation par utilisateur** : le schéma actuel suppose `User.organizationId` unique
    (un utilisateur appartient à une seule organisation, mais peut accéder à plusieurs cliniques de
    celle-ci via `UserClinicAccess`). Un comptable externe intervenant sur plusieurs organisations

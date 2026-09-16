@@ -1,6 +1,14 @@
 import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
 import { PERMISSIONS } from "./permissions";
+
+/**
+ * Dev-only credentials, printed to the console after seeding. Never valid outside a local/dev
+ * database — the seed refuses to run against NODE_ENV=production (below).
+ */
+const DEV_OWNER_EMAIL = "maxime.meyer@cabinet-leman.dev";
+const DEV_OWNER_PASSWORD = "ChangeMe123!";
 
 /**
  * Development seed: a fictional organization ("Cabinet Dentaire Léman") with RBAC permissions,
@@ -62,6 +70,26 @@ async function main(): Promise<void> {
     skipDuplicates: true,
   });
 
+  const ownerPasswordHash = await bcrypt.hash(DEV_OWNER_PASSWORD, 12);
+  const ownerUser = await prisma.user.upsert({
+    where: { email: DEV_OWNER_EMAIL },
+    update: {},
+    create: {
+      organizationId: organization.id,
+      email: DEV_OWNER_EMAIL,
+      passwordHash: ownerPasswordHash,
+      name: "Dr Maxime Meyer",
+      locale: "fr",
+      status: "active",
+    },
+  });
+
+  await prisma.userClinicAccess.upsert({
+    where: { userId_clinicId: { userId: ownerUser.id, clinicId: clinic.id } },
+    update: { roleId: ownerRole.id },
+    create: { userId: ownerUser.id, clinicId: clinic.id, roleId: ownerRole.id },
+  });
+
   const practitioners = [
     { firstName: "Maxime", lastName: "Meyer", specialty: "Médecine dentaire générale" },
     { firstName: "Sophie", lastName: "Martin", specialty: "Orthodontie" },
@@ -90,6 +118,8 @@ async function main(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(`Seeded organization "${organization.name}" (${organization.id}).`);
+  // eslint-disable-next-line no-console
+  console.log(`Dev login: ${DEV_OWNER_EMAIL} / ${DEV_OWNER_PASSWORD} (local/dev only — never real credentials).`);
 }
 
 main()

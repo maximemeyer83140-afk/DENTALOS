@@ -77,18 +77,32 @@ qui reste à durcir avant toute utilisation réelle (voir aussi `COMPLIANCE.md`)
 - Principe retenu dès maintenant : un backup non testé par une procédure de restauration n'est pas
   considéré comme une stratégie de récupération valide.
 
-## 3. Ce qui est fait en Phase 0 vs. ce qui reste à faire
+## 3. Ce qui est fait vs. ce qui reste à faire
 
 **Fait en Phase 0** : modèle de données posant les bases de l'isolation tenant et de l'audit
 (`AuditLog`, révisions cliniques), structure RBAC (`Role`/`Permission`/`RolePermission`/
 `UserClinicAccess`), TypeScript strict pour réduire la classe de bugs la plus courante,
 `.gitignore` excluant les secrets, `.env.example` sans valeur réelle.
 
-**Explicitement non fait en Phase 0** (à ne pas confondre avec "fait") : authentification
-fonctionnelle, MFA opérationnel, rate limiting, vérification de permissions au runtime, chiffrement
-au repos effectif, tests d'isolation tenant automatisés, pentest, monitoring de sécurité. Ces
-éléments sont planifiés dans `ROADMAP.md` (Phases 1 et 10) et ne doivent jamais être présentés
-comme acquis avant d'être réellement implémentés et vérifiés.
+**Fait en Phase 1** : authentification fonctionnelle (Auth.js v5, Credentials, sessions base de
+données révocables), MFA TOTP câblé (`authorize()` vérifie le code si `mfaEnabled`), vérification
+de permissions au runtime via `requirePermission()` (seul point d'entrée pour obtenir un
+`TenantContext`, jamais construit depuis un paramètre client), premier repository suivant le
+pattern "toujours filtré par tenant" (`listPractitioners`), et le test d'isolation tenant
+non-négociable (écrit — **pas encore exécuté**, voir `docs/phases/PHASE_1.md`).
+
+**Dette de sécurité introduite en Phase 1, à traiter avant toute donnée réelle** :
+- `User.mfaSecret` (secret TOTP) stocké en clair — doit être chiffré au repos.
+- Aucun rate limiting / verrouillage progressif sur `/login` — un formulaire de connexion sans
+  limite de tentatives est une porte ouverte au brute force.
+- Mot de passe de seed (`packages/database/src/seed.ts`) documenté en clair dans le code — acceptable
+  uniquement parce que c'est un compte de développement fictif, jamais un compte réel.
+
+**Explicitement non fait** (à ne pas confondre avec "fait") : rate limiting, chiffrement au repos
+effectif (DB/fichiers), tests d'isolation tenant automatisés **exécutés** (le test existe mais n'a
+pas tourné dans cet environnement, voir la limitation réseau documentée en Phase 0/1), pentest,
+monitoring de sécurité. Ces éléments sont planifiés dans `ROADMAP.md` (Phases 1 et 10) et ne
+doivent jamais être présentés comme acquis avant d'être réellement implémentés et vérifiés.
 
 ## 4. Avant toute mise en production
 

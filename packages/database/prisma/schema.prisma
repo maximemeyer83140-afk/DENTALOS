@@ -142,20 +142,72 @@ model User {
   id             String     @id @default(cuid())
   organizationId String
   email          String     @unique
+  emailVerified  DateTime?
   passwordHash   String?
-  fullName       String
+  name           String
+  image          String?
   locale         Locale     @default(fr)
   status         UserStatus @default(active)
   mfaEnabled     Boolean    @default(false)
+  /// TOTP secret. Phase 1 stores it in clear text — MUST be encrypted at rest before any real
+  /// (non-fictitious) data is stored. Tracked as a known security debt, see SECURITY.md.
+  mfaSecret      String?
   lastLoginAt    DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
   organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   clinicAccess UserClinicAccess[]
+  accounts     Account[]
+  sessions     Session[]
 
   @@index([organizationId])
   @@map("users")
+}
+
+/// Auth.js standard schema (unused fields until an OAuth/SSO provider is added — kept now so
+/// adding one later is a provider config change, not a migration).
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+/// Database-strategy session (not JWT): lets a compromised or offboarded user's session be
+/// revoked immediately by deleting the row, which a stateless JWT cannot do without a separate
+/// revocation list.
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
 }
 
 model Role {
