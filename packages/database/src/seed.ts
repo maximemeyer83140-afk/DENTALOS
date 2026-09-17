@@ -116,6 +116,27 @@ async function main(): Promise<void> {
     });
   }
 
+  const patients = [
+    { patientNumber: "2026-0001", firstName: "Léa", lastName: "Rochat", dateOfBirth: new Date("1990-04-12") },
+    { patientNumber: "2026-0002", firstName: "Marc", lastName: "Dubois", dateOfBirth: new Date("1978-11-27") },
+  ];
+
+  for (const patient of patients) {
+    await prisma.patient.upsert({
+      where: { clinicId_patientNumber: { clinicId: clinic.id, patientNumber: patient.patientNumber } },
+      update: {},
+      create: {
+        organizationId: organization.id,
+        clinicId: clinic.id,
+        patientNumber: patient.patientNumber,
+        firstName: patient.firstName,
+        lastName: patient.lastName,
+        dateOfBirth: patient.dateOfBirth,
+        createdBy: ownerUser.id,
+      },
+    });
+  }
+
   // eslint-disable-next-line no-console
   console.log(`Seeded organization "${organization.name}" (${organization.id}).`);
   // eslint-disable-next-line no-console

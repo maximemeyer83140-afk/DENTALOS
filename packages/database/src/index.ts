@@ -17,3 +17,11 @@ if (process.env.NODE_ENV !== "production") {
 
 export * from "@prisma/client";
 export * from "./tenant-context";
+export * from "./errors";
+export * from "./repositories/practitioners";
+export * from "./repositories/patients";
+export * from "./repositories/medical-profile";
+export * from "./repositories/medical-alerts";
+export * from "./repositories/documents";
+export * from "./services/patient-timeline";
+export * from "./services/storage-provider";
