@@ -17,6 +17,10 @@ export interface TreatmentPlanItemInput {
   unitPrice: number;
   tariffItemId?: string | undefined;
   practitionerId?: string | undefined;
+  /** Defaults to "planned" (a proposal — the "Devis" path). Pass "completed" for acts actually
+   * performed today (the "Traitement" path) — same items/options/quotes machinery either way, only
+   * the starting point in the TreatmentPlanItemStatus workflow differs. */
+  status?: TreatmentPlanItemStatus | undefined;
 }
 
 export interface CreateTreatmentPlanInput {
@@ -82,6 +86,7 @@ export async function createTreatmentPlan(
                 unitPrice: item.unitPrice,
                 tariffItemId: item.tariffItemId,
                 practitionerId: item.practitionerId,
+                status: item.status,
                 sequence: index,
               })),
             },

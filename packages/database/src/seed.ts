@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 import { PERMISSIONS } from "./permissions";
-import { DEMO_TARIFF_ITEMS, resolveTariffItemSeed } from "./seed-tariff-catalog";
+import { SSO_TARIFF_ITEMS } from "./seed-tariff-catalog";
 
 /**
  * Dev-only credentials, printed to the console after seeding. Never valid outside a local/dev
@@ -76,14 +76,15 @@ async function main(): Promise<void> {
   }
 
   const tariffCatalog =
-    (await prisma.tariffCatalog.findFirst({ where: { organizationId: organization.id, system: "DEMO" } })) ??
+    (await prisma.tariffCatalog.findFirst({ where: { organizationId: organization.id, system: "SSO_222" } })) ??
     (await prisma.tariffCatalog.create({
       data: {
         organizationId: organization.id,
-        name: "Catalogue d'exemple (à remplacer par l'import DENTOTAR officiel)",
-        system: "DEMO",
+        name: "Tarif dentaire AA/AM/AI (SSO) — Tarif 222",
+        system: "SSO_222",
         description:
-          "Codes et points d'exemple structurés comme le tarif dentaire suisse par points (SSO/DENTOTAR, AA/AM/AI) — voir seed-tariff-catalog.ts pour le détail de ce qui est vérifié vs. reconstruit.",
+          "Catalogue officiel importé depuis l'export hors-ligne fourni par le cabinet (Tarif 222, V2.00 / " +
+          "1er janvier 2025, en vigueur depuis le 1er janvier 2018) — voir seed-tariff-catalog.ts.",
       },
     }));
 
@@ -92,24 +93,27 @@ async function main(): Promise<void> {
     (await prisma.tariffVersion.create({
       data: {
         tariffCatalogId: tariffCatalog.id,
-        versionLabel: "Exemple 2026 (à valider)",
-        validFrom: new Date("2026-01-01"),
+        versionLabel: "Tarif 222 — V2.00 / 01.01.2025",
+        validFrom: new Date("2025-01-01"),
         isActive: true,
       },
     }));
 
-  for (const item of DEMO_TARIFF_ITEMS) {
-    const resolved = resolveTariffItemSeed(item);
+  for (const item of SSO_TARIFF_ITEMS) {
+    const description = item.lpComponents ? `${item.description} (inclut ${item.lpComponents})` : item.description;
+    const data = {
+      description,
+      category: item.category,
+      points: item.points ?? null,
+      pointsPrivateMin: item.pointsPrivateMin ?? null,
+      pointsPrivateMax: item.pointsPrivateMax ?? null,
+      pointValue: item.manualPrice ? null : 1,
+      manualPriceAllowed: item.manualPrice ?? false,
+    };
     await prisma.tariffItem.upsert({
-      where: { tariffVersionId_code: { tariffVersionId: tariffVersion.id, code: resolved.code } },
-      update: {
-        description: resolved.description,
-        category: resolved.category,
-        points: resolved.points,
-        pointValue: resolved.pointValue,
-        computedPrice: resolved.computedPrice,
-      },
-      create: { tariffVersionId: tariffVersion.id, ...resolved },
+      where: { tariffVersionId_code: { tariffVersionId: tariffVersion.id, code: item.code } },
+      update: data,
+      create: { tariffVersionId: tariffVersion.id, code: item.code, ...data },
     });
   }
 

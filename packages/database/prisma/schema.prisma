@@ -865,6 +865,12 @@ model TariffVersion {
   @@map("tariff_versions")
 }
 
+/// Swiss dental tariffs price a position two ways at once: a fixed point count for social-insurance
+/// billing (AA/AM/AI — `points`), and, for private patients under SSO's DENTOTAR®, a point RANGE the
+/// practitioner picks within depending on case complexity (`pointsPrivateMin`/`pointsPrivateMax`).
+/// Either way the point value itself (CHF per point) is never stored per item — it's a clinic/session
+/// setting (capped at CHF 1.70 for SSO members on DENTOTAR, fixed nationally at CHF 1.00 for AA/AM/AI
+/// since 1 January 2018), applied at pricing time by `services/tariff-pricing.ts`, never here.
 model TariffItem {
   id                   String   @id @default(cuid())
   tariffVersionId      String
@@ -872,6 +878,8 @@ model TariffItem {
   description          String
   category             String?
   points               Decimal? @db.Decimal(10, 3)
+  pointsPrivateMin     Decimal? @db.Decimal(10, 3)
+  pointsPrivateMax     Decimal? @db.Decimal(10, 3)
   pointValue           Decimal? @db.Decimal(10, 4)
   defaultQuantity      Int      @default(1)
   manualPriceAllowed   Boolean  @default(false)

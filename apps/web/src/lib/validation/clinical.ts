@@ -22,9 +22,17 @@ export const treatmentPlanLineSchema = z.object({
   tariffItemId: z.string().trim().min(1, "Sélectionne un acte"),
   toothNumber: optionalToothNumber,
   quantity: z.coerce.number().int().min(1).max(20).default(1),
+  privatePoints: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.coerce.number().positive().optional(),
+  ),
 });
 
 export type TreatmentPlanLineInput = z.infer<typeof treatmentPlanLineSchema>;
+
+/** "quote" builds a proposal (Devis — items start "planned", can later become a Quote). "treatment"
+ * records acts actually performed today (Traitement — items start "completed"). */
+export const treatmentPlanModeSchema = z.enum(["quote", "treatment"]);
 
 /**
  * The form serializes its dynamic line-item rows as a single JSON field (`linesJson`) rather than
@@ -33,11 +41,14 @@ export type TreatmentPlanLineInput = z.infer<typeof treatmentPlanLineSchema>;
  */
 export const createTreatmentPlanSchema = z
   .object({
+    mode: treatmentPlanModeSchema,
     practitionerId: z.string().trim().min(1, "Le praticien est requis"),
     optionLabel: z.preprocess(
       (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
       z.string().trim().max(120).optional(),
     ),
+    regime: z.enum(["AAI", "PRIVATE"]),
+    pointValue: z.coerce.number().positive().max(10),
     linesJson: z.string().min(1),
   })
   .transform((data, ctx) => {
@@ -53,5 +64,12 @@ export const createTreatmentPlanSchema = z
       ctx.addIssue({ code: "custom", message: lines.error.issues[0]?.message ?? "Lignes invalides" });
       return z.NEVER;
     }
-    return { practitionerId: data.practitionerId, optionLabel: data.optionLabel, lines: lines.data };
+    return {
+      mode: data.mode,
+      practitionerId: data.practitionerId,
+      optionLabel: data.optionLabel,
+      regime: data.regime,
+      pointValue: data.pointValue,
+      lines: lines.data,
+    };
   });

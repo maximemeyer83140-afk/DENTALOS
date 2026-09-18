@@ -26,7 +26,7 @@ SIX en vigueur, et tester avec l'outil de validation d'une banque/PostFinance. N
 cette implémentation comme certifiée. Point déjà présent dans `COMPLIANCE.md`, réaffirmé ici parce
 que c'est le code qui l'implémente.
 
-## Addendum — moteur tarifaire suisse (ajouté après retour utilisateur)
+## Addendum 1 — moteur tarifaire suisse (ajouté après retour utilisateur)
 
 Le premier passage de cette phase construisait les devis/factures avec une description et un prix
 saisis à la main (`TreatmentPlanForm`) — une violation directe de la règle "jamais de tarif codé en
@@ -48,22 +48,78 @@ serveur seul calcule et qu'aucun formulaire ne peut modifier.
   serveur (`createTreatmentPlanAction`) ignore tout prix venu du formulaire et ré-appelle
   `computeTariffItemPrice` lui-même pour chaque ligne avant d'écrire quoi que ce soit.
 
-### ⚠️ Avertissement explicite — codes du catalogue de démonstration
+Au moment de cet addendum, le catalogue seedé (`seed-tariff-catalog.ts`) utilisait des codes
+mnémoniques d'exemple (`ANE-01`, `RESTO-02`...) — **pas** des codes SSO/DENTOTAR officiels : le
+vrai catalogue est un produit sous licence de la SSO, et cette session avait explicitement tenté de
+le récupérer via `WebFetch` sur sso.ch et plusieurs miroirs, bloqué à chaque tentative
+(`EGRESS_BLOCKED`, politique réseau du bac à sable). Voir l'addendum 2 ci-dessous : ce catalogue de
+démonstration a depuis été remplacé par le vrai catalogue officiel, fourni directement par le
+cabinet.
 
-Les positions seedées dans `packages/database/src/seed-tariff-catalog.ts` (`ANE-01`, `RESTO-02`,
-etc.) **ne sont pas des codes SSO/DENTOTAR officiels**. Le vrai catalogue DENTOTAR® (~500
-positions, tarif dentaire suisse utilisé pour les patients privés et, sur la même structure par
-points, pour AA/AM/AI) est un produit sous licence de la SSO. Cette session a explicitement tenté
-de le récupérer via `WebFetch` sur sso.ch et plusieurs sites miroirs hébergeant le PDF officiel —
-chaque tentative a été bloquée par la politique réseau du bac à sable (`EGRESS_BLOCKED`, pas une
-supposition). Le seed utilise donc des codes mnémoniques (jamais un numéro à 4 chiffres qui
-pourrait passer pour un vrai code SSO) et des points d'exemple, à l'exception d'un seul chiffre
-vérifié contre une source en ligne : la valeur du point AA/AM/AI est fixée nationalement à
-**CHF 1.00** depuis le 1er janvier 2018 (confirmé par recherche web, pas inventé). Avant tout usage
-réel : remplacer le contenu de `seed-tariff-catalog.ts` par l'export officiel DENTOTAR que la SSO
-fournit à ses cabinets membres — le modèle `TariffCatalog`/`TariffVersion` supporte déjà de faire
-cohabiter plusieurs versions et de basculer la version active sans changement de code ; un
-importeur CSV/Excel pour ce fichier serait un ajout mécanique une fois le fichier en main.
+## Addendum 2 — remplacement par le vrai catalogue officiel SSO + Devis/Traitement (ajouté après
+retour utilisateur : "voici les tarifs complets")
+
+Le cabinet a fourni le fichier texte de l'export hors-ligne officiel du **Tarif 222 "Tarif dentaire
+AA/AM/AI (SSO)"**, version V2.00 / 1er janvier 2025 (en vigueur depuis le 1er janvier 2018, état du
+catalogue au 18 décembre 2024). Le document lui-même autorise cet usage : *"Les fournisseurs de
+prestations (à savoir les membres de la SSO et les signataires individuels de la convention
+tarifaire) sont autorisés à facturer sur cette base aux assureurs sociaux les prestations fournies
+aux assurés AA/AM/AI."* — c'est exactement l'usage fait ici : le logiciel de facturation du cabinet
+qui l'a fourni.
+
+- **Extraction** : le fichier source (texte issu d'un navigateur tarifaire hors ligne) a été analysé
+  par un script Python dédié (non versionné dans le dépôt, exécuté une fois pendant cette session)
+  qui isole chaque position (code, titre, chapitre, points AA/AM/AI, plage de points patient privé,
+  taux de TVA, prise en charge). Deux pièges rencontrés et corrigés pendant l'extraction : (1) les
+  codes "Prestations groupées Plus" (LP+, ex. `4.0000.LP`) apparaissent deux fois dans le document —
+  une mention brève sans données dans leur chapitre d'origine, puis leur définition complète au
+  chapitre 15 — un mauvais choix aurait gardé la version vide ; corrigé en fusionnant par code et en
+  gardant la variante la plus complète. (2) des titres longs s'étalent sur 2-3 lignes dans le texte
+  source ; le script recolle ces lignes de continuation plutôt que de tronquer le titre au premier
+  saut de ligne. **630 positions** au total (chapitres 01 à 12 : actes cliniques ; 15 : prestations
+  groupées Plus ; 19-20 : matériel/positions cluster à prix libre), chacune avec au moins un champ
+  de prix exploitable — vérifié pendant la génération, pas supposé.
+- **Schéma** : `TariffItem` gagne `pointsPrivateMin`/`pointsPrivateMax` (Decimal, nullable) — le
+  tarif suisse fixe un nombre de points pour l'AA/AM/AI mais une *plage* de points pour DENTOTAR
+  (patient privé), le praticien choisissant dans cette plage selon la complexité du cas. `points`
+  reste le nombre de points AA/AM/AI (ou AA/AM pour une position LP+).
+- **`tariff-pricing.ts` redesigné** : `computeTariffItemPrice` prend maintenant `{ item, regime,
+  pointValue, privatePoints? }` — le régime (`"AAI"` ou `"PRIVATE"`) et la valeur du point ne sont
+  **jamais** lus sur l'item lui-même mais fournis par l'appelant à chaque calcul (réglage de
+  cabinet/séance, jamais codé en dur). `privatePoints` (optionnel) choisit un nombre de points dans
+  la plage privée ; par défaut le maximum de la plage.
+- **Devis / Traitement** : `TreatmentPlanItemInput` gagne un `status` optionnel ; `createTreatmentPlan`
+  le propage tel quel (défaut Prisma `planned` si omis). `createTreatmentPlanAction` gagne un champ
+  `mode` (`"quote"` | `"treatment"`) soumis par le bouton cliqué (deux boutons submit, même
+  `name="mode"`, valeurs différentes — comportement natif du formulaire, pas de JS supplémentaire) :
+  `"quote"` construit une option avec des lignes `planned` (un devis, comme avant) ; `"treatment"`
+  construit la même structure mais avec des lignes `completed` (un acte réalisé aujourd'hui). Choix
+  délibéré de réutiliser `TreatmentPlan`/`TreatmentPlanOption`/`TreatmentPlanItem` plutôt que de
+  câbler une pipeline séparée sur le modèle `Treatment` (qui existe dans le schéma depuis la Phase 0
+  mais n'a pas de repository) : la distinction "proposé" vs "réalisé" est exactement ce que le champ
+  `status` existant sert à représenter, et une option "Traitement" reste éligible au même parcours
+  `createQuoteFromPlanOption` → facture si le cabinet veut la facturer après coup.
+- **`TreatmentPlanForm.tsx` réécrit une seconde fois** : recherche texte-libre ("tape un mot,
+  Entrée pour ajouter" — filtre en direct sur 630 positions, tri par pertinence : titre commence
+  par > mot commence par > code > sous-chaîne), sélecteur de régime tarifaire + champ "valeur du
+  point" éditable (avertissement du plafond SSO CHF 1.70 affiché en régime privé), menu "codes
+  groupés" (`apps/web/src/lib/tariff-presets.ts` — protocoles courants du type "Composite 2 faces
+  (molaire)" ajoutant anesthésie + digue + mordançage + adhésif + obturation en un clic, codes réels
+  vérifiés présents dans le catalogue, pas inventés), bouton retirer par ligne, deux boutons submit
+  DEVIS/TRAITEMENT, bouton Imprimer (`window.print()` + CSS `@media print` isolant le tableau de
+  lignes). Le total affiché en direct reste une prévisualisation client — recalculé indépendamment
+  côté serveur avant toute écriture.
+
+### ⚠️ Avertissement explicite — ce qui reste à vérifier avant usage réel
+
+Le catalogue est maintenant le vrai Tarif 222, pas un exemple inventé — mais l'extraction automatisée
+d'un document texte de 13 000+ lignes peut avoir des erreurs résiduelles au-delà de ce qui a été
+vérifié pendant cette session (troncatures de titres corrigées, décompte : 630/630 positions avec un
+champ de prix ; voir ci-dessus). Avant toute facturation réelle : faire vérifier par le cabinet un
+échantillon des positions les plus utilisées contre le document officiel, en particulier les points
+AA/AM/AI et les plages privées min/max. Le "codes groupés" (`tariff-presets.ts`) sont une commodité
+d'interface, pas des positions officielles — vérifier que les protocoles proposés correspondent aux
+habitudes cliniques réelles du cabinet avant de s'y fier en routine.
 
 ## Décisions prises dans cette phase
 
@@ -134,8 +190,11 @@ la Phase 0).
   auto-cohérent (`buildQrrReference` produit toujours une référence que `verifyQrrReference`
   valide ; une référence corrompue est détectée) ; le payload contient les champs obligatoires
   dans l'ordre attendu, avec fins de ligne CRLF et trailer `EPD`.
-- `tariff-pricing.test.ts` : priorité au prix forfaitaire quand il existe ; sinon points × valeur
-  du point ; erreur si ni l'un ni l'autre n'est disponible ; arrondi au centime.
+- `tariff-pricing.test.ts` : priorité au prix forfaitaire quand il existe ; régime AAI multiplie les
+  points fixes par la valeur du point donnée ; régime PRIVATE utilise le maximum de la plage privée
+  par défaut ou un nombre de points choisi dans cette plage, rejette un choix hors plage, retombe
+  sur les points fixes quand aucune plage privée n'existe (positions LP+) ; erreur si rien n'est
+  disponible ; arrondi au centime.
 - `tariff.test.ts` : seule la version active du catalogue est listée ; une position d'une version
   inactive reste lisible par id (historique jamais supprimé) ; isolation multi-tenant vérifiée.
 
@@ -146,11 +205,14 @@ la Phase 0).
 - [x] Onglet Facturation branché
 - [x] Moteur tarifaire (catalogue/version/positions) branché au plan de traitement — devis
       multi-lignes construits depuis le catalogue, jamais un prix saisi à la main
+- [x] Catalogue de démonstration remplacé par le vrai Tarif 222 SSO (AA/AM/AI), fourni par le
+      cabinet — 630 positions, régimes AA/AM/AI et patient privé, valeur du point ajustable,
+      boutons Devis/Traitement, codes groupés, impression (addendum 2)
 - [x] Tests d'immutabilité, de numérotation concurrente, d'allocation de paiement, du chiffre de
-      contrôle QRR et du calcul tarifaire écrits
+      contrôle QRR et du calcul tarifaire (régimes AAI/PRIVATE) écrits
 - [ ] `pnpm install && pnpm db:migrate && pnpm test` exécutés avec succès — **toujours bloqué**
       (même limitation réseau que les phases précédentes)
 - [ ] Payload QR-facture validé contre le document officiel SIX et un outil bancaire réel — **non
       fait, bloquant avant tout usage réel** (voir avertissement ci-dessus)
-- [ ] Catalogue de démonstration remplacé par l'export DENTOTAR officiel de la SSO — **non fait,
-      bloquant avant toute facturation réelle** (voir avertissement ci-dessus)
+- [ ] Échantillon du catalogue Tarif 222 vérifié par le cabinet contre le document officiel — **non
+      fait, recommandé avant toute facturation réelle** (voir avertissement de l'addendum 2)

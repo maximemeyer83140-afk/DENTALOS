@@ -100,8 +100,11 @@ export async function finalizeNoteAction(patientId: string, noteId: string): Pro
  * Builds a treatment plan option from one or more tariff-catalog lines (e.g. anesthésie + digue +
  * composite in a single visit). The price is never taken from the client: each line only carries a
  * `tariffItemId`, and the server re-resolves the item's real description and price from the
- * catalog (`computeTariffItemPrice`) before writing anything — the same "server is the only
- * authority on money" rule already applied to quotes/invoices (section 79).
+ * catalog under the chosen billing regime (`computeTariffItemPrice`) before writing anything — the
+ * same "server is the only authority on money" rule already applied to quotes/invoices (section
+ * 79). `mode` picks what the built option represents: "quote" (Devis — a proposal, items start
+ * "planned", can later become a Quote) or "treatment" (Traitement — acts performed today, items
+ * start "completed").
  */
 export async function createTreatmentPlanAction(
   patientId: string,
@@ -119,9 +122,15 @@ export async function createTreatmentPlanAction(
     const tariffItem = await getTariffItem(ctx, line.tariffItemId);
     let unitPrice: number;
     try {
-      unitPrice = computeTariffItemPrice(tariffItem);
-    } catch {
-      return { error: `L'acte "${tariffItem.description}" n'a pas de prix calculable dans le catalogue.` };
+      unitPrice = computeTariffItemPrice({
+        item: tariffItem,
+        regime: parsed.data.regime,
+        pointValue: parsed.data.pointValue,
+        privatePoints: line.privatePoints,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "prix non calculable";
+      return { error: `${tariffItem.code} — ${tariffItem.description} : ${message}` };
     }
     items.push({
       description: `${tariffItem.code} — ${tariffItem.description}`,
@@ -129,13 +138,19 @@ export async function createTreatmentPlanAction(
       quantity: line.quantity,
       unitPrice,
       tariffItemId: tariffItem.id,
+      status: parsed.data.mode === "treatment" ? "completed" : undefined,
     });
   }
+
+  const defaultLabel =
+    parsed.data.mode === "treatment"
+      ? `Séance du ${new Date().toLocaleDateString("fr-CH")}`
+      : "Option A";
 
   await createTreatmentPlan(
     ctx,
     patientId,
-    { practitionerId: parsed.data.practitionerId, optionLabel: parsed.data.optionLabel ?? "Option A", items },
+    { practitionerId: parsed.data.practitionerId, optionLabel: parsed.data.optionLabel ?? defaultLabel, items },
     ctx.userId,
   );
 

@@ -2,7 +2,6 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
-  computeTariffItemPrice,
   getCurrentChart,
   getMedicalProfile,
   getPatient,
@@ -165,15 +164,16 @@ export default async function PatientDetailPage({
       conditions[entry.toothNumber] = entry.condition;
     }
     const practitionerOptions = practitioners.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }));
-    const tariffOptions: TariffItemOption[] = tariffItems.map((item) => {
-      let price: number | null;
-      try {
-        price = computeTariffItemPrice(item);
-      } catch {
-        price = null;
-      }
-      return { id: item.id, code: item.code, description: item.description, category: item.category ?? "Autres", price };
-    });
+    const tariffOptions: TariffItemOption[] = tariffItems.map((item) => ({
+      id: item.id,
+      code: item.code,
+      description: item.description,
+      category: item.category ?? "Autres",
+      points: item.points != null ? Number(item.points) : null,
+      pointsPrivateMin: item.pointsPrivateMin != null ? Number(item.pointsPrivateMin) : null,
+      pointsPrivateMax: item.pointsPrivateMax != null ? Number(item.pointsPrivateMax) : null,
+      computedPrice: item.computedPrice != null ? Number(item.computedPrice) : null,
+    }));
     const quotesByPatient = await listQuotesForPatient(ctx, id);
 
     tabContent = (
