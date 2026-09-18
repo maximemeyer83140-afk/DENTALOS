@@ -2,26 +2,46 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
+  getCurrentChart,
   getMedicalProfile,
   getPatient,
   getPatientTimeline,
   listActiveAlerts,
   listDocumentsForPatient,
   listMedicalProfileRevisions,
+  listNotesForPatient,
+  listPractitioners,
+  listQuotesForPatient,
+  listTreatmentPlansForPatient,
 } from "@dentalos/database";
+import type { DentalConditionType } from "@dentalos/database";
 
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 
 import { AlertForm } from "./AlertForm";
 import { MedicalProfileForm } from "./MedicalProfileForm";
+import { NoteForm } from "./NoteForm";
+import { FinalizeNoteButton } from "./NoteActions";
+import { Odontogram } from "./Odontogram";
+import { QuoteButton } from "./QuoteButton";
+import { TreatmentPlanForm } from "./TreatmentPlanForm";
 
 const TABS = [
   { id: "overview", label: "Overview" },
   { id: "clinical", label: "Dossier médical" },
+  { id: "chart", label: "Clinique" },
   { id: "documents", label: "Documents" },
   { id: "timeline", label: "Timeline" },
 ] as const;
+
+const QUOTE_STATUS_LABEL: Record<string, string> = {
+  draft: "Brouillon",
+  sent: "Envoyé",
+  accepted: "Accepté",
+  rejected: "Refusé",
+  expired: "Expiré",
+};
 
 const ALERT_SEVERITY_CLASS: Record<string, string> = {
   info: "bg-blue-50 text-blue-700",
@@ -101,6 +121,96 @@ export default async function PatientDetailPage({
               Version actuelle : {profile?.version ?? 1}. {revisions.length} révision(s) précédente(s)
               conservée(s) — jamais écrasées.
             </p>
+          </div>
+        ) : null}
+      </div>
+    );
+  } else if (tab === "chart") {
+    const [chart, notes, practitioners, plans] = await Promise.all([
+      getCurrentChart(ctx, id),
+      listNotesForPatient(ctx, id),
+      listPractitioners(ctx),
+      listTreatmentPlansForPatient(ctx, id),
+    ]);
+    const conditions: Record<number, DentalConditionType> = {};
+    for (const entry of chart?.entries ?? []) {
+      conditions[entry.toothNumber] = entry.condition;
+    }
+    const practitionerOptions = practitioners.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }));
+    const quotesByPatient = await listQuotesForPatient(ctx, id);
+
+    tabContent = (
+      <div className="flex flex-col gap-8">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Odontogramme</h2>
+          <Odontogram patientId={id} conditions={conditions} />
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Notes cliniques ({notes.length})</h2>
+          <ul className="mb-3 flex flex-col gap-2">
+            {notes.map((note) => (
+              <li key={note.id} className="rounded-md border border-border px-3 py-2 text-sm">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">{formatDateTime(note.createdAt)}</span>
+                  {note.isFinalized ? (
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">Finalisée</span>
+                  ) : (
+                    <FinalizeNoteButton patientId={id} noteId={note.id} />
+                  )}
+                </div>
+                <p className="text-foreground">{note.content}</p>
+              </li>
+            ))}
+            {notes.length === 0 ? <li className="text-sm text-muted-foreground">Aucune note.</li> : null}
+          </ul>
+          <NoteForm patientId={id} practitioners={practitionerOptions} />
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Plan de traitement</h2>
+          <ul className="mb-3 flex flex-col gap-3">
+            {plans.map((plan) => (
+              <li key={plan.id} className="rounded-md border border-border p-3">
+                <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{plan.status}</div>
+                {plan.options.map((option) => (
+                  <div key={option.id} className="mb-2">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-foreground">{option.label}</span>
+                      <QuoteButton patientId={id} treatmentPlanOptionId={option.id} />
+                    </div>
+                    <ul className="flex flex-col gap-1">
+                      {option.items.map((item) => (
+                        <li key={item.id} className="flex justify-between text-sm text-muted-foreground">
+                          <span>
+                            {item.description}
+                            {item.toothNumber ? ` (dent ${item.toothNumber})` : ""}
+                          </span>
+                          <span className="font-mono">CHF {item.unitPrice.toString()}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </li>
+            ))}
+            {plans.length === 0 ? <li className="text-sm text-muted-foreground">Aucun plan de traitement.</li> : null}
+          </ul>
+          <TreatmentPlanForm patientId={id} practitioners={practitionerOptions} />
+        </div>
+
+        {quotesByPatient.length > 0 ? (
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-foreground">Devis</h2>
+            <ul className="flex flex-col gap-2">
+              {quotesByPatient.map((quote) => (
+                <li key={quote.id} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
+                  <span className="font-mono">{quote.quoteNumber}</span>
+                  <span className="text-muted-foreground">{QUOTE_STATUS_LABEL[quote.status] ?? quote.status}</span>
+                  <span className="font-mono">CHF {quote.total.toString()}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
       </div>
