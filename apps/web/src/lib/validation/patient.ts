@@ -31,6 +31,13 @@ export const createPatientSchema = z.object({
   npa: optionalText(10),
   city: optionalText(100),
   canton: optionalText(10),
+  language: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.enum(["fr", "de", "it", "en"]).optional(),
+  ),
+  /** Set once the user has seen the potential-duplicate warning and chosen to create anyway — see
+   * ÉTAPE 2's duplicate check in patients/new/actions.ts. */
+  confirmDuplicate: z.preprocess((value) => value === "true" || value === "1", z.boolean()).optional(),
 });
 
 export type CreatePatientFormInput = z.infer<typeof createPatientSchema>;

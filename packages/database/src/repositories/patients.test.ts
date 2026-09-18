@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { prisma } from "../index";
-import { createPatient, getPatient, listPatients, updatePatient } from "./patients";
+import { createPatient, findPotentialDuplicates, getPatient, listPatients, updatePatient } from "./patients";
 
 /**
  * Same non-negotiable guarantee as practitioners.test.ts (section 64): Organization A must never
@@ -94,5 +94,50 @@ describe("patients repository", () => {
     );
     const numbers = results.map((p) => p.patientNumber);
     expect(new Set(numbers).size).toBe(numbers.length);
+  });
+
+  it("findPotentialDuplicates flags a matching name and date of birth", async () => {
+    const dob = new Date(`1985-03-12T00:00:00.000Z`);
+    await createPatient(orgAIds, { firstName: "Julie", lastName: `Dupont-${suffix}`, dateOfBirth: dob }, "seed");
+
+    const duplicates = await findPotentialDuplicates(orgAIds, {
+      firstName: "julie",
+      lastName: `dupont-${suffix}`,
+      dateOfBirth: dob,
+    });
+    expect(duplicates.length).toBeGreaterThan(0);
+    expect(duplicates[0]!.reasons).toContain("même nom, prénom et date de naissance");
+  });
+
+  it("findPotentialDuplicates flags a matching phone number even with a different name", async () => {
+    await createPatient(orgAIds, { firstName: "Marco", lastName: `Polo-${suffix}`, phone: "0791234567" }, "seed");
+
+    const duplicates = await findPotentialDuplicates(orgAIds, {
+      firstName: "Someone",
+      lastName: "Else",
+      phone: "0791234567",
+    });
+    expect(duplicates.some((d) => d.reasons.includes("même numéro de téléphone"))).toBe(true);
+  });
+
+  it("findPotentialDuplicates returns nothing for a genuinely new patient", async () => {
+    const duplicates = await findPotentialDuplicates(orgAIds, {
+      firstName: `Unique-${suffix}`,
+      lastName: `Patient-${suffix}`,
+      phone: "0000000000",
+      email: `unique-${suffix}@example.test`,
+    });
+    expect(duplicates).toEqual([]);
+  });
+
+  it("findPotentialDuplicates never returns another organization's patients", async () => {
+    await createPatient(orgBIds, { firstName: "Cross", lastName: `Tenant-${suffix}`, email: `cross-${suffix}@example.test` }, "seed");
+
+    const duplicates = await findPotentialDuplicates(orgAIds, {
+      firstName: "Cross",
+      lastName: `Tenant-${suffix}`,
+      email: `cross-${suffix}@example.test`,
+    });
+    expect(duplicates).toEqual([]);
   });
 });

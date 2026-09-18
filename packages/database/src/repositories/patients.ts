@@ -107,6 +107,70 @@ export async function createPatient(
   throw new Error("createPatient: exhausted retry attempts without a definitive result");
 }
 
+export interface DuplicateCheckInput {
+  firstName: string;
+  lastName: string;
+  dateOfBirth?: Date | undefined;
+  phone?: string | undefined;
+  mobile?: string | undefined;
+  email?: string | undefined;
+}
+
+export interface PotentialDuplicate {
+  patient: Patient;
+  reasons: string[];
+}
+
+function isSameCalendarDay(a: Date, b: Date): boolean {
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
+}
+
+/**
+ * Best-effort duplicate warning (ÉTAPE 2 : "empêcher autant que possible la création accidentelle
+ * de doublons") — never blocks creation outright, the UI shows the matches and lets the user
+ * confirm anyway (a legitimate second patient can share a name, and typos in phone/email are
+ * common enough that a hard block would be worse than the problem it solves).
+ */
+export async function findPotentialDuplicates(
+  ctx: TenantContext,
+  input: DuplicateCheckInput,
+): Promise<PotentialDuplicate[]> {
+  const orConditions: Prisma.PatientWhereInput[] = [
+    { firstName: { equals: input.firstName, mode: "insensitive" }, lastName: { equals: input.lastName, mode: "insensitive" } },
+  ];
+  const phoneLike = [input.phone, input.mobile].filter((v): v is string => Boolean(v));
+  for (const value of phoneLike) {
+    orConditions.push({ phone: value });
+    orConditions.push({ mobile: value });
+  }
+  if (input.email) orConditions.push({ email: { equals: input.email, mode: "insensitive" } });
+
+  const candidates = await prisma.patient.findMany({
+    where: { organizationId: ctx.organizationId, clinicId: ctx.clinicId, OR: orConditions },
+  });
+
+  return candidates
+    .map((patient): PotentialDuplicate => {
+      const reasons = new Set<string>();
+      const sameName =
+        patient.firstName.toLowerCase() === input.firstName.toLowerCase() &&
+        patient.lastName.toLowerCase() === input.lastName.toLowerCase();
+      if (sameName && input.dateOfBirth && patient.dateOfBirth && isSameCalendarDay(patient.dateOfBirth, input.dateOfBirth)) {
+        reasons.add("même nom, prénom et date de naissance");
+      } else if (sameName) {
+        reasons.add("même nom et prénom");
+      }
+      if (phoneLike.some((value) => patient.phone === value || patient.mobile === value)) {
+        reasons.add("même numéro de téléphone");
+      }
+      if (input.email && patient.email && patient.email.toLowerCase() === input.email.toLowerCase()) {
+        reasons.add("même email");
+      }
+      return { patient, reasons: Array.from(reasons) };
+    })
+    .filter((candidate) => candidate.reasons.length > 0);
+}
+
 export async function updatePatient(
   ctx: TenantContext,
   patientId: string,

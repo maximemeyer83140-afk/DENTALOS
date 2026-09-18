@@ -4,7 +4,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { AppointmentConflictError } from "../services/appointment-conflict";
 import { prisma } from "../index";
-import { createAppointment, listAppointmentsForDay, listAppointmentsForRange, updateAppointment } from "./appointments";
+import {
+  createAppointment,
+  listAppointmentsForDay,
+  listAppointmentsForPatient,
+  listAppointmentsForRange,
+  updateAppointment,
+} from "./appointments";
 
 /**
  * The agenda's non-negotiable rule (sections 18/82): the server must refuse to double-book a
@@ -173,5 +179,23 @@ describe("appointments repository", () => {
     const appt = await createAppointment(ctx, { practitionerId: practitionerA, startAt: s.startAt, endAt: s.endAt }, "seed");
     const updated = await updateAppointment(ctx, appt.id, { patientId: null });
     expect(updated.patientId).toBeNull();
+  });
+
+  it("listAppointmentsForPatient returns only that patient's appointments, most recent first", async () => {
+    const patient = await prisma.patient.create({
+      data: { organizationId: ctx.organizationId, clinicId: ctx.clinicId, patientNumber: `T-${suffix}`, firstName: "Rendez", lastName: `Vous-${suffix}` },
+    });
+    const earlier = slot(7);
+    const later = slot(20);
+    await createAppointment(ctx, { patientId: patient.id, practitionerId: practitionerA, startAt: earlier.startAt, endAt: earlier.endAt }, "seed");
+    await createAppointment(ctx, { patientId: patient.id, practitionerId: practitionerB, startAt: later.startAt, endAt: later.endAt }, "seed");
+    // Someone else's appointment on the same day must never leak in.
+    await createAppointment(ctx, { practitionerId: practitionerA, startAt: slot(21).startAt, endAt: slot(21).endAt }, "seed");
+
+    const results = await listAppointmentsForPatient(ctx, patient.id);
+    expect(results.length).toBe(2);
+    expect(results.every((a) => a.patientId === patient.id)).toBe(true);
+    expect(results[0]!.startAt.getTime()).toBe(later.startAt.getTime());
+    expect(results[1]!.startAt.getTime()).toBe(earlier.startAt.getTime());
   });
 });

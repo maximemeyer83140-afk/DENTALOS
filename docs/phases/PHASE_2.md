@@ -96,3 +96,104 @@ la Phase 1. Aucune nouvelle permission nécessaire.
 - [ ] `pnpm install && pnpm db:migrate && pnpm test` exécutés avec succès — **toujours bloqué dans
       cette session** (même limitation réseau que les Phases 0 et 1). À faire en priorité absolue
       dès que l'accès npm est rétabli, avant Phase 3.
+
+## Addendum — refonte création patient + fiche patient (ÉTAPES 2 et 3 d'un plan en plusieurs
+étapes : Agenda → Fiche patient, sur demande explicite de l'utilisateur ; l'Agenda a été traitée en
+ÉTAPE 1, voir l'addendum de PHASE_3.md)
+
+### ÉTAPE 2 — refonte de la création patient
+
+Le formulaire de création existait déjà (`/patients/new`) mais restait minimal : pas de détection
+de doublon, pas de champ langue, sexe en texte libre. Réutilise `createPatient` et le schéma Zod
+existants ; rien n'a été réécrit depuis zéro.
+
+#### Changements base de données
+
+Aucun. `Patient.language` (`Locale?`) existait déjà depuis la Phase 0 mais n'était pas exposé dans
+le formulaire.
+
+#### API / logique serveur
+
+- `packages/database/src/repositories/patients.ts` — nouvelle fonction
+  `findPotentialDuplicates(ctx, input)` : cherche les patients existants partageant nom+prénom
+  (insensible à la casse), téléphone/mobile, ou email, puis annote chaque correspondance des
+  raisons précises (« même nom, prénom et date de naissance », « même numéro de téléphone », etc.).
+  Ne bloque jamais la création — l'énoncé demande d'« empêcher **autant que possible** » les
+  doublons, pas de les interdire, et un vrai deuxième patient peut légitimement partager un nom.
+  Scopée `TenantContext` comme tout le reste du repository.
+- `apps/web/src/app/patients/new/actions.ts` — `createPatientAction` appelle désormais
+  `findPotentialDuplicates` avant `createPatient` ; si des correspondances existent et que le
+  formulaire n'a pas encore été confirmé (`confirmDuplicate`), renvoie les candidats à l'UI au lieu
+  de créer le patient.
+- `apps/web/src/lib/validation/patient.ts` — ajout de `language` (`fr`/`de`/`it`/`en`) et
+  `confirmDuplicate` (booléen, champ caché) au schéma de création.
+
+#### UI
+
+- `apps/web/src/app/patients/new/page.tsx` — sexe et langue en listes déroulantes ; en cas de
+  doublon potentiel, un encart ambré liste les correspondances (nom, numéro patient, raisons, lien
+  vers la fiche existante dans un nouvel onglet) avec un bouton « Créer quand même » qui resoumet le
+  même formulaire (les champs déjà saisis ne sont jamais perdus, via un champ cache
+  `confirmDuplicate` piloté par `useRef` + `requestSubmit()`) sans relancer la vérification.
+
+### ÉTAPE 3 — refonte complète de la fiche patient
+
+La fiche patient (`/patients/[id]`) avait déjà 6 onglets (Overview, Dossier médical, Clinique,
+Facturation, Documents, Timeline) construits sur les mêmes repositories que la Phase 4/5. Cette
+étape sépare ce qui était mélangé dans l'onglet « Clinique » (odontogramme + notes + plan de
+traitement + devis) et ajoute un onglet Rendez-vous, sans réécrire aucun repository métier.
+
+#### Changements base de données
+
+Aucun.
+
+#### API / logique serveur
+
+- `packages/database/src/repositories/appointments.ts` — nouvelle fonction
+  `listAppointmentsForPatient(ctx, patientId)` : tous les rendez-vous (passés et futurs) d'un
+  patient, plus récents en premier, scopée `TenantContext`. Alimente le nouvel onglet Rendez-vous.
+
+#### UI
+
+- `apps/web/src/app/patients/[id]/page.tsx` — réécrit :
+  - **En-tête toujours visible** (quel que soit l'onglet actif) : nom/prénom, numéro patient,
+    date de naissance **et âge calculé**, téléphone, email, puis les alertes médicales actives —
+    exactement l'énoncé (« bandeau clair … montrant immédiatement … et surtout toute alerte médicale
+    importante »).
+  - **Huit onglets** au lieu de six : Résumé, Anamnèse, Clinique / Soins, Plan de traitement,
+    Devis, Facturation, Documents, Rendez-vous.
+    - Résumé (ex-Overview) : adresse/langue, puis trois compteurs (prochain rendez-vous, plans de
+      traitement actifs, factures impayées) et l'activité récente (fusion de l'ancien onglet
+      Timeline — huit derniers événements).
+    - Anamnèse (ex-« Dossier médical ») : inchangé (profil médical, alertes, historique des
+      révisions).
+    - Clinique / Soins : odontogramme + notes cliniques (sorti de l'ancien onglet « Clinique » qui
+      contenait aussi le plan de traitement et les devis).
+    - Plan de traitement : sorti du même ancien onglet, isolé.
+    - Devis : sorti du même ancien onglet, isolé — la création d'un devis reste rattachée à une
+      option du plan de traitement (bouton présent dans l'onglet Plan de traitement).
+    - Facturation, Documents : inchangés.
+    - Rendez-vous (nouveau) : liste de `listAppointmentsForPatient`, avec date, horaire, type,
+      praticien, salle et statut (mêmes libellés français que le calendrier de l'Agenda).
+
+### Permissions
+
+Inchangées : `patients.read`/`patients.write`.
+
+### Tests
+
+- `packages/database/src/repositories/patients.test.ts` (étendu) : `findPotentialDuplicates`
+  détecte nom+prénom+date de naissance, détecte un téléphone identique même avec un nom différent,
+  ne renvoie rien pour un patient réellement nouveau, et ne renvoie jamais les patients d'une autre
+  organisation.
+- `packages/database/src/repositories/appointments.test.ts` (étendu) :
+  `listAppointmentsForPatient` ne renvoie que les rendez-vous du patient demandé (jamais ceux d'un
+  autre patient du même jour), triés du plus récent au plus ancien.
+
+### Limitation connue
+
+Comme pour les phases précédentes : `pnpm install`/`typecheck`/`lint`/`test`/`build` restent
+bloqués dans ce bac à sable (accès npm refusé). Vérification faite via
+`node --experimental-strip-types --check` (fichiers `.ts`) et un script Python de vérification
+d'équilibre des accolades/parenthèses/crochets pour les fichiers `.tsx` — pas un remplacement
+complet d'un vrai typecheck TypeScript, à relancer dès que l'accès npm est rétabli.

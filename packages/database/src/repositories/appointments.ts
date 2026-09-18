@@ -59,6 +59,19 @@ export async function listAppointmentsForRange(
   });
 }
 
+/** Used by the "Rendez-vous" tab of the fiche patient (ÉTAPE 3) — every past and future
+ * appointment for one patient, most recent first. */
+export async function listAppointmentsForPatient(
+  ctx: TenantContext,
+  patientId: string,
+): Promise<AppointmentWithRelations[]> {
+  return prisma.appointment.findMany({
+    where: { organizationId: ctx.organizationId, clinicId: ctx.clinicId, patientId },
+    include: APPOINTMENT_INCLUDE,
+    orderBy: { startAt: "desc" },
+  });
+}
+
 export async function getAppointment(ctx: TenantContext, id: string): Promise<AppointmentWithRelations> {
   const appointment = await prisma.appointment.findFirst({
     where: { id, organizationId: ctx.organizationId, clinicId: ctx.clinicId },
