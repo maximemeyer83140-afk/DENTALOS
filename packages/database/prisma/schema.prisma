@@ -310,7 +310,14 @@ model Practitioner {
 
   clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
 
-  compensationRules CompensationRule[]
+  compensationRules  CompensationRule[]
+  appointments       Appointment[]
+  clinicalNotes      ClinicalNote[]
+  treatmentPlans     TreatmentPlan[]
+  treatmentPlanItems TreatmentPlanItem[]
+  treatments         Treatment[]
+  quotes             Quote[]
+  invoices           Invoice[]
 
   @@unique([clinicId, firstName, lastName])
   @@index([organizationId])
@@ -543,6 +550,7 @@ model Appointment {
 
   clinic          Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   patient         Patient?         @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  practitioner    Practitioner     @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
   room            Room?            @relation(fields: [roomId], references: [id], onDelete: SetNull)
   appointmentType AppointmentType? @relation(fields: [appointmentTypeId], references: [id], onDelete: SetNull)
 
@@ -593,9 +601,10 @@ model ClinicalNote {
   updatedAt      DateTime @updatedAt
   createdBy      String?
 
-  patient     Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
-  revisions   ClinicalNoteRevision[]
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
+  appointment  Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  revisions    ClinicalNoteRevision[]
 
   @@index([organizationId])
   @@index([patientId, createdAt])
@@ -693,8 +702,9 @@ model TreatmentPlan {
   updatedAt      DateTime          @updatedAt
   createdBy      String?
 
-  patient Patient                @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  options TreatmentPlanOption[]
+  patient      Patient               @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  practitioner Practitioner          @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
+  options      TreatmentPlanOption[]
 
   @@index([organizationId])
   @@index([patientId])
@@ -731,6 +741,7 @@ model TreatmentPlanItem {
 
   treatmentPlanOption TreatmentPlanOption @relation(fields: [treatmentPlanOptionId], references: [id], onDelete: Cascade)
   tariffItem          TariffItem?         @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
+  practitioner        Practitioner?       @relation(fields: [practitionerId], references: [id], onDelete: SetNull)
   treatments          Treatment[]
 
   @@index([treatmentPlanOptionId])
@@ -757,6 +768,7 @@ model Treatment {
   createdBy           String?
 
   patient           Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  practitioner      Practitioner       @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
   appointment       Appointment?       @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   treatmentPlanItem TreatmentPlanItem? @relation(fields: [treatmentPlanItemId], references: [id], onDelete: SetNull)
   tariffItem        TariffItem?        @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
@@ -790,8 +802,9 @@ model Quote {
   updatedAt       DateTime    @updatedAt
   createdBy       String?
 
-  patient Patient     @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  items   QuoteItem[]
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
+  items        QuoteItem[]
 
   @@unique([clinicId, quoteNumber])
   @@index([organizationId])
@@ -914,8 +927,9 @@ model Invoice {
   updatedAt      DateTime      @updatedAt
   createdBy      String?
 
-  patient Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
-  payer   Payer?  @relation(fields: [payerId], references: [id], onDelete: SetNull)
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  payer        Payer?       @relation(fields: [payerId], references: [id], onDelete: SetNull)
+  practitioner Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
 
   items              InvoiceItem[]
   creditNotes        CreditNote[]
