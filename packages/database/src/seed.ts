@@ -55,6 +55,25 @@ async function main(): Promise<void> {
     },
   });
 
+  const existingBankAccount = await prisma.bankAccount.findFirst({
+    where: { organizationId: organization.id, iban: "CH9300762011623852957" },
+  });
+  if (!existingBankAccount) {
+    await prisma.bankAccount.create({
+      data: {
+        organizationId: organization.id,
+        clinicId: clinic.id,
+        label: "Compte principal",
+        // Canonical Swiss test IBAN (widely used in SIX documentation examples) — not a QR-IBAN,
+        // so invoices from this seed data use referenceType "NON" until a real QR-IBAN is configured.
+        iban: "CH9300762011623852957",
+        bankName: "Banque Cantonale de Genève",
+        currency: "CHF",
+        isDefault: true,
+      },
+    });
+  }
+
   const ownerRole = await prisma.role.upsert({
     where: { organizationId_name: { organizationId: organization.id, name: "Owner" } },
     update: {},

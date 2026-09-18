@@ -4,12 +4,15 @@ import { revalidatePath } from "next/cache";
 
 import {
   addAlert,
+  createInvoiceFromQuote,
   createNote,
   createQuoteFromPlanOption,
   createTreatmentPlan,
   finalizeNote,
+  recordPayment,
   recordToothCondition,
   updateMedicalProfile,
+  validateInvoice,
 } from "@dentalos/database";
 import type { DentalConditionType } from "@dentalos/database";
 
@@ -17,6 +20,7 @@ import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 import { addAlertSchema, updateMedicalProfileSchema } from "@/lib/validation/medical-profile";
 import { createNoteSchema, createTreatmentPlanSchema } from "@/lib/validation/clinical";
+import { recordPaymentSchema } from "@/lib/validation/billing";
 
 export interface ActionState {
   error?: string;
@@ -126,4 +130,44 @@ export async function createQuoteAction(patientId: string, treatmentPlanOptionId
   const ctx = await requirePermission(clinicId, "clinical.write");
   await createQuoteFromPlanOption(ctx, treatmentPlanOptionId, undefined, ctx.userId);
   revalidatePath(`/patients/${patientId}`);
+}
+
+export async function createInvoiceAction(patientId: string, quoteId: string): Promise<void> {
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "invoices.create");
+  await createInvoiceFromQuote(ctx, quoteId, undefined, ctx.userId);
+  revalidatePath(`/patients/${patientId}`);
+}
+
+export async function validateInvoiceAction(patientId: string, invoiceId: string): Promise<void> {
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "invoices.validate");
+  await validateInvoice(ctx, invoiceId, ctx.userId);
+  revalidatePath(`/patients/${patientId}`);
+}
+
+export async function recordPaymentAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = recordPaymentSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "payments.create");
+  await recordPayment(
+    ctx,
+    {
+      patientId,
+      amount: parsed.data.amount,
+      method: parsed.data.method,
+      reference: parsed.data.reference,
+      allocations: [{ invoiceId: parsed.data.invoiceId, amount: parsed.data.amount }],
+    },
+    ctx.userId,
+  );
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
 }

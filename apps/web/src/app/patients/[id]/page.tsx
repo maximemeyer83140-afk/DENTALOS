@@ -8,8 +8,10 @@ import {
   getPatientTimeline,
   listActiveAlerts,
   listDocumentsForPatient,
+  listInvoicesForPatient,
   listMedicalProfileRevisions,
   listNotesForPatient,
+  listPaymentsForPatient,
   listPractitioners,
   listQuotesForPatient,
   listTreatmentPlansForPatient,
@@ -20,10 +22,13 @@ import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 
 import { AlertForm } from "./AlertForm";
+import { InvoiceButton } from "./InvoiceButton";
+import { ValidateInvoiceButton } from "./InvoiceActions";
 import { MedicalProfileForm } from "./MedicalProfileForm";
 import { NoteForm } from "./NoteForm";
 import { FinalizeNoteButton } from "./NoteActions";
 import { Odontogram } from "./Odontogram";
+import { PaymentForm } from "./PaymentForm";
 import { QuoteButton } from "./QuoteButton";
 import { TreatmentPlanForm } from "./TreatmentPlanForm";
 
@@ -31,6 +36,7 @@ const TABS = [
   { id: "overview", label: "Overview" },
   { id: "clinical", label: "Dossier médical" },
   { id: "chart", label: "Clinique" },
+  { id: "billing", label: "Facturation" },
   { id: "documents", label: "Documents" },
   { id: "timeline", label: "Timeline" },
 ] as const;
@@ -41,6 +47,25 @@ const QUOTE_STATUS_LABEL: Record<string, string> = {
   accepted: "Accepté",
   rejected: "Refusé",
   expired: "Expiré",
+};
+
+const INVOICE_STATUS_LABEL: Record<string, string> = {
+  draft: "Brouillon",
+  issued: "Émise",
+  partially_paid: "Partiellement payée",
+  paid: "Payée",
+  overdue: "En retard",
+  cancelled: "Annulée",
+  credited: "Créditée",
+};
+
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  cash: "Espèces",
+  card: "Carte",
+  twint: "TWINT",
+  bank_transfer: "Virement",
+  qr_bill: "QR-facture",
+  other: "Autre",
 };
 
 const ALERT_SEVERITY_CLASS: Record<string, string> = {
@@ -208,11 +233,55 @@ export default async function PatientDetailPage({
                   <span className="font-mono">{quote.quoteNumber}</span>
                   <span className="text-muted-foreground">{QUOTE_STATUS_LABEL[quote.status] ?? quote.status}</span>
                   <span className="font-mono">CHF {quote.total.toString()}</span>
+                  {quote.status === "accepted" ? <InvoiceButton patientId={id} quoteId={quote.id} /> : null}
                 </li>
               ))}
             </ul>
           </div>
         ) : null}
+      </div>
+    );
+  } else if (tab === "billing") {
+    const [invoices, payments] = await Promise.all([
+      listInvoicesForPatient(ctx, id),
+      listPaymentsForPatient(ctx, id),
+    ]);
+    const payableInvoices = invoices
+      .filter((invoice) => invoice.status === "issued" || invoice.status === "partially_paid")
+      .map((invoice) => ({ id: invoice.id, invoiceNumber: invoice.invoiceNumber, balance: invoice.balance.toString() }));
+
+    tabContent = (
+      <div className="flex flex-col gap-8">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Factures ({invoices.length})</h2>
+          <ul className="flex flex-col gap-2">
+            {invoices.map((invoice) => (
+              <li key={invoice.id} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                <span className="font-mono">{invoice.invoiceNumber}</span>
+                <span className="text-muted-foreground">{INVOICE_STATUS_LABEL[invoice.status] ?? invoice.status}</span>
+                <span className="font-mono">CHF {invoice.total.toString()}</span>
+                <span className="font-mono text-muted-foreground">solde CHF {invoice.balance.toString()}</span>
+                {invoice.status === "draft" ? <ValidateInvoiceButton patientId={id} invoiceId={invoice.id} /> : null}
+              </li>
+            ))}
+            {invoices.length === 0 ? <li className="text-sm text-muted-foreground">Aucune facture.</li> : null}
+          </ul>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Paiements ({payments.length})</h2>
+          <ul className="mb-3 flex flex-col gap-2">
+            {payments.map((payment) => (
+              <li key={payment.id} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
+                <span className="text-muted-foreground">{formatDateTime(payment.paidAt)}</span>
+                <span>{PAYMENT_METHOD_LABEL[payment.method] ?? payment.method}</span>
+                <span className="font-mono">CHF {payment.amount.toString()}</span>
+              </li>
+            ))}
+            {payments.length === 0 ? <li className="text-sm text-muted-foreground">Aucun paiement.</li> : null}
+          </ul>
+          <PaymentForm patientId={id} invoices={payableInvoices} />
+        </div>
       </div>
     );
   } else if (tab === "documents") {
