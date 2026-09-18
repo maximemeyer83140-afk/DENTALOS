@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 import { PERMISSIONS } from "./permissions";
+import { DEMO_TARIFF_ITEMS, resolveTariffItemSeed } from "./seed-tariff-catalog";
 
 /**
  * Dev-only credentials, printed to the console after seeding. Never valid outside a local/dev
@@ -71,6 +72,44 @@ async function main(): Promise<void> {
         currency: "CHF",
         isDefault: true,
       },
+    });
+  }
+
+  const tariffCatalog =
+    (await prisma.tariffCatalog.findFirst({ where: { organizationId: organization.id, system: "DEMO" } })) ??
+    (await prisma.tariffCatalog.create({
+      data: {
+        organizationId: organization.id,
+        name: "Catalogue d'exemple (à remplacer par l'import DENTOTAR officiel)",
+        system: "DEMO",
+        description:
+          "Codes et points d'exemple structurés comme le tarif dentaire suisse par points (SSO/DENTOTAR, AA/AM/AI) — voir seed-tariff-catalog.ts pour le détail de ce qui est vérifié vs. reconstruit.",
+      },
+    }));
+
+  const tariffVersion =
+    (await prisma.tariffVersion.findFirst({ where: { tariffCatalogId: tariffCatalog.id, isActive: true } })) ??
+    (await prisma.tariffVersion.create({
+      data: {
+        tariffCatalogId: tariffCatalog.id,
+        versionLabel: "Exemple 2026 (à valider)",
+        validFrom: new Date("2026-01-01"),
+        isActive: true,
+      },
+    }));
+
+  for (const item of DEMO_TARIFF_ITEMS) {
+    const resolved = resolveTariffItemSeed(item);
+    await prisma.tariffItem.upsert({
+      where: { tariffVersionId_code: { tariffVersionId: tariffVersion.id, code: resolved.code } },
+      update: {
+        description: resolved.description,
+        category: resolved.category,
+        points: resolved.points,
+        pointValue: resolved.pointValue,
+        computedPrice: resolved.computedPrice,
+      },
+      create: { tariffVersionId: tariffVersion.id, ...resolved },
     });
   }
 

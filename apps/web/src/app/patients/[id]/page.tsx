@@ -2,11 +2,13 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
+  computeTariffItemPrice,
   getCurrentChart,
   getMedicalProfile,
   getPatient,
   getPatientTimeline,
   listActiveAlerts,
+  listActiveTariffItems,
   listDocumentsForPatient,
   listInvoicesForPatient,
   listMedicalProfileRevisions,
@@ -30,7 +32,7 @@ import { FinalizeNoteButton } from "./NoteActions";
 import { Odontogram } from "./Odontogram";
 import { PaymentForm } from "./PaymentForm";
 import { QuoteButton } from "./QuoteButton";
-import { TreatmentPlanForm } from "./TreatmentPlanForm";
+import { TreatmentPlanForm, type TariffItemOption } from "./TreatmentPlanForm";
 
 const TABS = [
   { id: "overview", label: "Overview" },
@@ -151,17 +153,27 @@ export default async function PatientDetailPage({
       </div>
     );
   } else if (tab === "chart") {
-    const [chart, notes, practitioners, plans] = await Promise.all([
+    const [chart, notes, practitioners, plans, tariffItems] = await Promise.all([
       getCurrentChart(ctx, id),
       listNotesForPatient(ctx, id),
       listPractitioners(ctx),
       listTreatmentPlansForPatient(ctx, id),
+      listActiveTariffItems(ctx),
     ]);
     const conditions: Record<number, DentalConditionType> = {};
     for (const entry of chart?.entries ?? []) {
       conditions[entry.toothNumber] = entry.condition;
     }
     const practitionerOptions = practitioners.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }));
+    const tariffOptions: TariffItemOption[] = tariffItems.map((item) => {
+      let price: number | null;
+      try {
+        price = computeTariffItemPrice(item);
+      } catch {
+        price = null;
+      }
+      return { id: item.id, code: item.code, description: item.description, category: item.category ?? "Autres", price };
+    });
     const quotesByPatient = await listQuotesForPatient(ctx, id);
 
     tabContent = (
@@ -221,7 +233,7 @@ export default async function PatientDetailPage({
             ))}
             {plans.length === 0 ? <li className="text-sm text-muted-foreground">Aucun plan de traitement.</li> : null}
           </ul>
-          <TreatmentPlanForm patientId={id} practitioners={practitionerOptions} />
+          <TreatmentPlanForm patientId={id} practitioners={practitionerOptions} tariffItems={tariffOptions} />
         </div>
 
         {quotesByPatient.length > 0 ? (

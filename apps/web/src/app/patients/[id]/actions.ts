@@ -4,17 +4,19 @@ import { revalidatePath } from "next/cache";
 
 import {
   addAlert,
+  computeTariffItemPrice,
   createInvoiceFromQuote,
   createNote,
   createQuoteFromPlanOption,
   createTreatmentPlan,
   finalizeNote,
+  getTariffItem,
   recordPayment,
   recordToothCondition,
   updateMedicalProfile,
   validateInvoice,
 } from "@dentalos/database";
-import type { DentalConditionType } from "@dentalos/database";
+import type { DentalConditionType, TreatmentPlanItemInput } from "@dentalos/database";
 
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
@@ -94,6 +96,13 @@ export async function finalizeNoteAction(patientId: string, noteId: string): Pro
   revalidatePath(`/patients/${patientId}`);
 }
 
+/**
+ * Builds a treatment plan option from one or more tariff-catalog lines (e.g. anesthésie + digue +
+ * composite in a single visit). The price is never taken from the client: each line only carries a
+ * `tariffItemId`, and the server re-resolves the item's real description and price from the
+ * catalog (`computeTariffItemPrice`) before writing anything — the same "server is the only
+ * authority on money" rule already applied to quotes/invoices (section 79).
+ */
 export async function createTreatmentPlanAction(
   patientId: string,
   _prevState: ActionState,
@@ -104,20 +113,29 @@ export async function createTreatmentPlanAction(
 
   const clinicId = await getDefaultClinicId();
   const ctx = await requirePermission(clinicId, "clinical.write");
+
+  const items: TreatmentPlanItemInput[] = [];
+  for (const line of parsed.data.lines) {
+    const tariffItem = await getTariffItem(ctx, line.tariffItemId);
+    let unitPrice: number;
+    try {
+      unitPrice = computeTariffItemPrice(tariffItem);
+    } catch {
+      return { error: `L'acte "${tariffItem.description}" n'a pas de prix calculable dans le catalogue.` };
+    }
+    items.push({
+      description: `${tariffItem.code} — ${tariffItem.description}`,
+      toothNumber: line.toothNumber,
+      quantity: line.quantity,
+      unitPrice,
+      tariffItemId: tariffItem.id,
+    });
+  }
+
   await createTreatmentPlan(
     ctx,
     patientId,
-    {
-      practitionerId: parsed.data.practitionerId,
-      optionLabel: "Option A",
-      items: [
-        {
-          description: parsed.data.description,
-          unitPrice: parsed.data.unitPrice,
-          toothNumber: parsed.data.toothNumber,
-        },
-      ],
-    },
+    { practitionerId: parsed.data.practitionerId, optionLabel: parsed.data.optionLabel ?? "Option A", items },
     ctx.userId,
   );
 

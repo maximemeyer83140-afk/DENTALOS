@@ -26,6 +26,45 @@ SIX en vigueur, et tester avec l'outil de validation d'une banque/PostFinance. N
 cette implémentation comme certifiée. Point déjà présent dans `COMPLIANCE.md`, réaffirmé ici parce
 que c'est le code qui l'implémente.
 
+## Addendum — moteur tarifaire suisse (ajouté après retour utilisateur)
+
+Le premier passage de cette phase construisait les devis/factures avec une description et un prix
+saisis à la main (`TreatmentPlanForm`) — une violation directe de la règle "jamais de tarif codé en
+dur" (section 79) que cet addendum corrige : le plan de traitement se construit maintenant en
+ajoutant des lignes choisies dans un vrai catalogue tarifaire, plusieurs lignes par option (ex. une
+séance = anesthésie + digue + obturation composite, chacune sa propre ligne), avec un prix que le
+serveur seul calcule et qu'aucun formulaire ne peut modifier.
+
+- `packages/database/src/repositories/tariff.ts` — `listActiveTariffItems`,
+  `getTariffItem` : lisent la version *active* du catalogue de l'organisation (`TariffCatalog` →
+  `TariffVersion.isActive` → `TariffItem`, tous existants depuis la Phase 0).
+- `packages/database/src/services/tariff-pricing.ts` — `computeTariffItemPrice` : seul endroit
+  qui calcule le prix CHF d'une position, exactement comme le tarif dentaire suisse fonctionne
+  réellement (points × valeur du point, sauf position à prix forfaitaire) — jamais un prix
+  recopié depuis le client.
+- `TreatmentPlanForm.tsx` a été entièrement réécrit : composant client avec des lignes dynamiques
+  ("+ Ajouter une ligne"), chaque ligne choisit un acte dans un `<select>` groupé par catégorie,
+  dent, quantité ; un total s'affiche en direct côté client **à titre indicatif seulement** — le
+  serveur (`createTreatmentPlanAction`) ignore tout prix venu du formulaire et ré-appelle
+  `computeTariffItemPrice` lui-même pour chaque ligne avant d'écrire quoi que ce soit.
+
+### ⚠️ Avertissement explicite — codes du catalogue de démonstration
+
+Les positions seedées dans `packages/database/src/seed-tariff-catalog.ts` (`ANE-01`, `RESTO-02`,
+etc.) **ne sont pas des codes SSO/DENTOTAR officiels**. Le vrai catalogue DENTOTAR® (~500
+positions, tarif dentaire suisse utilisé pour les patients privés et, sur la même structure par
+points, pour AA/AM/AI) est un produit sous licence de la SSO. Cette session a explicitement tenté
+de le récupérer via `WebFetch` sur sso.ch et plusieurs sites miroirs hébergeant le PDF officiel —
+chaque tentative a été bloquée par la politique réseau du bac à sable (`EGRESS_BLOCKED`, pas une
+supposition). Le seed utilise donc des codes mnémoniques (jamais un numéro à 4 chiffres qui
+pourrait passer pour un vrai code SSO) et des points d'exemple, à l'exception d'un seul chiffre
+vérifié contre une source en ligne : la valeur du point AA/AM/AI est fixée nationalement à
+**CHF 1.00** depuis le 1er janvier 2018 (confirmé par recherche web, pas inventé). Avant tout usage
+réel : remplacer le contenu de `seed-tariff-catalog.ts` par l'export officiel DENTOTAR que la SSO
+fournit à ses cabinets membres — le modèle `TariffCatalog`/`TariffVersion` supporte déjà de faire
+cohabiter plusieurs versions et de basculer la version active sans changement de code ; un
+importeur CSV/Excel pour ce fichier serait un ajout mécanique une fois le fichier en main.
+
 ## Décisions prises dans cette phase
 
 - **Numérotation facture** : assignée **à la création du brouillon**, pas seulement à la
@@ -58,6 +97,8 @@ que c'est le code qui l'implémente.
   touchée — jamais un simple `UPDATE` isolé qui pourrait désynchroniser les deux).
 - `packages/database/src/repositories/credit-notes.ts` — `createCreditNote` (refuse sur une
   facture `draft` ou déjà `cancelled`), numéroté, réduit le solde dû.
+- `packages/database/src/repositories/tariff.ts` / `services/tariff-pricing.ts` — voir addendum
+  ci-dessus.
 
 ## UI
 
@@ -93,15 +134,23 @@ la Phase 0).
   auto-cohérent (`buildQrrReference` produit toujours une référence que `verifyQrrReference`
   valide ; une référence corrompue est détectée) ; le payload contient les champs obligatoires
   dans l'ordre attendu, avec fins de ligne CRLF et trailer `EPD`.
+- `tariff-pricing.test.ts` : priorité au prix forfaitaire quand il existe ; sinon points × valeur
+  du point ; erreur si ni l'un ni l'autre n'est disponible ; arrondi au centime.
+- `tariff.test.ts` : seule la version active du catalogue est listée ; une position d'une version
+  inactive reste lisible par id (historique jamais supprimé) ; isolation multi-tenant vérifiée.
 
 ## Definition of Done
 
 - [x] Services et repositories écrits (calculateur, numérotation, factures, paiements, avoirs,
       QR-facture)
 - [x] Onglet Facturation branché
-- [x] Tests d'immutabilité, de numérotation concurrente, d'allocation de paiement et du chiffre de
-      contrôle QRR écrits
+- [x] Moteur tarifaire (catalogue/version/positions) branché au plan de traitement — devis
+      multi-lignes construits depuis le catalogue, jamais un prix saisi à la main
+- [x] Tests d'immutabilité, de numérotation concurrente, d'allocation de paiement, du chiffre de
+      contrôle QRR et du calcul tarifaire écrits
 - [ ] `pnpm install && pnpm db:migrate && pnpm test` exécutés avec succès — **toujours bloqué**
       (même limitation réseau que les phases précédentes)
 - [ ] Payload QR-facture validé contre le document officiel SIX et un outil bancaire réel — **non
       fait, bloquant avant tout usage réel** (voir avertissement ci-dessus)
+- [ ] Catalogue de démonstration remplacé par l'export DENTOTAR officiel de la SSO — **non fait,
+      bloquant avant toute facturation réelle** (voir avertissement ci-dessus)
