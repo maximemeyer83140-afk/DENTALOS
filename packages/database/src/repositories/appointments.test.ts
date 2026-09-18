@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { AppointmentConflictError } from "../services/appointment-conflict";
 import { prisma } from "../index";
-import { createAppointment, listAppointmentsForDay } from "./appointments";
+import { createAppointment, listAppointmentsForDay, listAppointmentsForRange, updateAppointment } from "./appointments";
 
 /**
  * The agenda's non-negotiable rule (sections 18/82): the server must refuse to double-book a
@@ -119,5 +119,59 @@ describe("appointments repository", () => {
   it("never returns another organization's appointments for the same day", async () => {
     const results = await listAppointmentsForDay(ctx, day);
     expect(results.every((a) => a.organizationId === ctx.organizationId)).toBe(true);
+  });
+
+  it("listAppointmentsForRange spans several days and excludes the exclusive end boundary", async () => {
+    const dayTwo = new Date(day);
+    dayTwo.setUTCDate(dayTwo.getUTCDate() + 1);
+    const onDayTwo = { startAt: new Date(dayTwo), endAt: new Date(dayTwo.getTime() + 30 * 60_000) };
+    onDayTwo.startAt.setUTCHours(8, 0, 0, 0);
+    onDayTwo.endAt.setUTCHours(8, 30, 0, 0);
+    await createAppointment(ctx, { practitionerId: practitionerA, startAt: onDayTwo.startAt, endAt: onDayTwo.endAt }, "seed");
+
+    const rangeStart = new Date(day);
+    const rangeEndExclusive = new Date(dayTwo); // midnight of day two — the day-two appointment (08:00) is inside, a day-three one would not be
+    rangeEndExclusive.setUTCDate(rangeEndExclusive.getUTCDate() + 1);
+
+    const results = await listAppointmentsForRange(ctx, rangeStart, rangeEndExclusive);
+    expect(results.some((a) => a.startAt.getTime() === onDayTwo.startAt.getTime())).toBe(true);
+
+    const dayOneOnly = await listAppointmentsForRange(ctx, rangeStart, dayTwo);
+    expect(dayOneOnly.some((a) => a.startAt.getTime() === onDayTwo.startAt.getTime())).toBe(false);
+  });
+
+  it("updateAppointment changes the time without touching untouched fields", async () => {
+    const original = slot(15);
+    const appt = await createAppointment(ctx, { practitionerId: practitionerA, roomId: roomA, startAt: original.startAt, endAt: original.endAt, notes: "note initiale" }, "seed");
+
+    const moved = slot(16);
+    const updated = await updateAppointment(ctx, appt.id, { startAt: moved.startAt, endAt: moved.endAt });
+    expect(updated.startAt.getTime()).toBe(moved.startAt.getTime());
+    expect(updated.roomId).toBe(roomA);
+    expect(updated.notes).toBe("note initiale");
+  });
+
+  it("updateAppointment re-checks the conflict engine only when time/practitioner/room actually change", async () => {
+    const busy = slot(17);
+    await createAppointment(ctx, { practitionerId: practitionerB, startAt: busy.startAt, endAt: busy.endAt }, "seed");
+
+    const own = slot(18);
+    const appt = await createAppointment(ctx, { practitionerId: practitionerA, startAt: own.startAt, endAt: own.endAt }, "seed");
+
+    // Editing only the notes must never be blocked by an unrelated practitioner's unrelated slot.
+    const updated = await updateAppointment(ctx, appt.id, { notes: "juste une note" });
+    expect(updated.notes).toBe("juste une note");
+
+    // But actually moving onto practitioner B's busy slot must still be rejected.
+    await expect(
+      updateAppointment(ctx, appt.id, { practitionerId: practitionerB, startAt: busy.startAt, endAt: busy.endAt }),
+    ).rejects.toThrow(AppointmentConflictError);
+  });
+
+  it("updateAppointment can clear the patient (turning it into a reserved block)", async () => {
+    const s = slot(19);
+    const appt = await createAppointment(ctx, { practitionerId: practitionerA, startAt: s.startAt, endAt: s.endAt }, "seed");
+    const updated = await updateAppointment(ctx, appt.id, { patientId: null });
+    expect(updated.patientId).toBeNull();
   });
 });

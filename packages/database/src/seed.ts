@@ -178,6 +178,48 @@ async function main(): Promise<void> {
     });
   }
 
+  const rooms = ["Salle 1", "Salle 2"];
+  for (const roomName of rooms) {
+    const existingRoom = await prisma.room.findFirst({ where: { clinicId: clinic.id, name: roomName } });
+    if (!existingRoom) {
+      await prisma.room.create({ data: { clinicId: clinic.id, name: roomName } });
+    }
+  }
+
+  // Appointment types (agenda "types de rendez-vous configurables" — section ÉTAPE 1.3): each
+  // carries a display color and a default duration the booking modal pre-fills (still editable per
+  // appointment). Colors chosen to stay visually distinct from one another in the calendar grid.
+  const appointmentTypes: { name: string; color: string; defaultDurationMinutes: number }[] = [
+    { name: "Consultation", color: "#2563EB", defaultDurationMinutes: 30 },
+    { name: "Contrôle", color: "#0891B2", defaultDurationMinutes: 20 },
+    { name: "Détartrage", color: "#059669", defaultDurationMinutes: 45 },
+    { name: "Soins", color: "#65A30D", defaultDurationMinutes: 45 },
+    { name: "Endodontie", color: "#7C3AED", defaultDurationMinutes: 60 },
+    { name: "Prothèse", color: "#D97706", defaultDurationMinutes: 60 },
+    { name: "Chirurgie", color: "#DC2626", defaultDurationMinutes: 60 },
+    { name: "Implantologie", color: "#9333EA", defaultDurationMinutes: 90 },
+    { name: "Urgence", color: "#E11D48", defaultDurationMinutes: 30 },
+    { name: "Orthodontie", color: "#0D9488", defaultDurationMinutes: 30 },
+  ];
+  for (const type of appointmentTypes) {
+    const existingType = await prisma.appointmentType.findFirst({ where: { clinicId: clinic.id, name: type.name } });
+    if (existingType) {
+      await prisma.appointmentType.update({
+        where: { id: existingType.id },
+        data: { color: type.color, defaultDurationMinutes: type.defaultDurationMinutes },
+      });
+    } else {
+      await prisma.appointmentType.create({
+        data: {
+          clinicId: clinic.id,
+          name: type.name,
+          color: type.color,
+          defaultDurationMinutes: type.defaultDurationMinutes,
+        },
+      });
+    }
+  }
+
   const patients = [
     { patientNumber: "2026-0001", firstName: "Léa", lastName: "Rochat", dateOfBirth: new Date("1990-04-12") },
     { patientNumber: "2026-0002", firstName: "Marc", lastName: "Dubois", dateOfBirth: new Date("1978-11-27") },
@@ -194,6 +236,63 @@ async function main(): Promise<void> {
         firstName: patient.firstName,
         lastName: patient.lastName,
         dateOfBirth: patient.dateOfBirth,
+        createdBy: ownerUser.id,
+      },
+    });
+  }
+
+  const [meyer, martin] = await Promise.all([
+    prisma.practitioner.findFirstOrThrow({ where: { clinicId: clinic.id, lastName: "Meyer" } }),
+    prisma.practitioner.findFirstOrThrow({ where: { clinicId: clinic.id, lastName: "Martin" } }),
+  ]);
+  const [rochat, dubois] = await Promise.all([
+    prisma.patient.findFirstOrThrow({ where: { clinicId: clinic.id, patientNumber: "2026-0001" } }),
+    prisma.patient.findFirstOrThrow({ where: { clinicId: clinic.id, patientNumber: "2026-0002" } }),
+  ]);
+  const [salle1, salle2] = await Promise.all([
+    prisma.room.findFirstOrThrow({ where: { clinicId: clinic.id, name: "Salle 1" } }),
+    prisma.room.findFirstOrThrow({ where: { clinicId: clinic.id, name: "Salle 2" } }),
+  ]);
+  const typeByName = new Map(
+    (await prisma.appointmentType.findMany({ where: { clinicId: clinic.id } })).map((t) => [t.name, t.id]),
+  );
+
+  function todayAt(hour: number, minute: number): Date {
+    const d = new Date();
+    d.setHours(hour, minute, 0, 0);
+    return d;
+  }
+
+  const sampleAppointments: {
+    practitionerId: string;
+    patientId: string;
+    roomId: string;
+    typeName: string;
+    startAt: Date;
+    endAt: Date;
+  }[] = [
+    { practitionerId: meyer.id, patientId: rochat.id, roomId: salle1.id, typeName: "Contrôle", startAt: todayAt(8, 30), endAt: todayAt(8, 50) },
+    { practitionerId: meyer.id, patientId: dubois.id, roomId: salle1.id, typeName: "Détartrage", startAt: todayAt(9, 30), endAt: todayAt(10, 15) },
+    { practitionerId: martin.id, patientId: rochat.id, roomId: salle2.id, typeName: "Orthodontie", startAt: todayAt(10, 0), endAt: todayAt(10, 30) },
+    { practitionerId: meyer.id, patientId: dubois.id, roomId: salle1.id, typeName: "Consultation", startAt: todayAt(14, 0), endAt: todayAt(14, 30) },
+  ];
+
+  for (const appt of sampleAppointments) {
+    const existing = await prisma.appointment.findFirst({
+      where: { clinicId: clinic.id, practitionerId: appt.practitionerId, startAt: appt.startAt },
+    });
+    if (existing) continue;
+    await prisma.appointment.create({
+      data: {
+        organizationId: organization.id,
+        clinicId: clinic.id,
+        patientId: appt.patientId,
+        practitionerId: appt.practitionerId,
+        roomId: appt.roomId,
+        appointmentTypeId: typeByName.get(appt.typeName),
+        startAt: appt.startAt,
+        endAt: appt.endAt,
+        status: "confirmed",
         createdBy: ownerUser.id,
       },
     });

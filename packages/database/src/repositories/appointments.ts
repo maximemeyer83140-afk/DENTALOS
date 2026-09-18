@@ -42,6 +42,16 @@ export async function listAppointmentsForDay(
   date: Date,
 ): Promise<AppointmentWithRelations[]> {
   const { start, end } = dayBounds(date);
+  return listAppointmentsForRange(ctx, start, end);
+}
+
+/** `end` is exclusive — pass the day after the last day you want included (e.g. the week view
+ * passes Monday 00:00 as `start` and the following Monday 00:00 as `end`). */
+export async function listAppointmentsForRange(
+  ctx: TenantContext,
+  start: Date,
+  end: Date,
+): Promise<AppointmentWithRelations[]> {
   return prisma.appointment.findMany({
     where: { clinicId: ctx.clinicId, startAt: { gte: start, lt: end } },
     include: APPOINTMENT_INCLUDE,
@@ -120,6 +130,74 @@ export async function rescheduleAppointment(
     });
 
     return tx.appointment.update({ where: { id: appointmentId }, data: { startAt, endAt } });
+  });
+}
+
+export interface UpdateAppointmentInput {
+  patientId?: string | null | undefined;
+  practitionerId?: string | undefined;
+  roomId?: string | null | undefined;
+  appointmentTypeId?: string | null | undefined;
+  startAt?: Date | undefined;
+  endAt?: Date | undefined;
+  notes?: string | null | undefined;
+}
+
+/**
+ * The full edit path (time, practitioner, room, type, patient, notes — anything the appointment
+ * modal's edit mode can touch), as opposed to `rescheduleAppointment`'s narrow drag-and-drop case.
+ * Only re-checks the conflict engine when the time, practitioner, or room actually change — editing
+ * just the notes or the appointment type on an otherwise-untouched slot shouldn't ever be blocked
+ * by a conflict that has nothing to do with the fields being changed.
+ */
+export async function updateAppointment(
+  ctx: TenantContext,
+  appointmentId: string,
+  input: UpdateAppointmentInput,
+): Promise<Appointment> {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.appointment.findFirst({
+      where: { id: appointmentId, organizationId: ctx.organizationId, clinicId: ctx.clinicId },
+    });
+    if (!existing) throw new NotFoundError(`Appointment ${appointmentId} not found`);
+
+    const nextStartAt = input.startAt ?? existing.startAt;
+    const nextEndAt = input.endAt ?? existing.endAt;
+    if (nextEndAt <= nextStartAt) {
+      throw new Error("Appointment end time must be after its start time");
+    }
+    const nextPractitionerId = input.practitionerId ?? existing.practitionerId;
+    const nextRoomId = input.roomId !== undefined ? input.roomId : existing.roomId;
+
+    const resourcesChanged =
+      nextStartAt.getTime() !== existing.startAt.getTime() ||
+      nextEndAt.getTime() !== existing.endAt.getTime() ||
+      nextPractitionerId !== existing.practitionerId ||
+      nextRoomId !== existing.roomId;
+
+    if (resourcesChanged) {
+      await assertNoConflict(tx, {
+        clinicId: ctx.clinicId,
+        practitionerId: nextPractitionerId,
+        roomId: nextRoomId,
+        startAt: nextStartAt,
+        endAt: nextEndAt,
+        excludeAppointmentId: appointmentId,
+      });
+    }
+
+    return tx.appointment.update({
+      where: { id: appointmentId },
+      data: {
+        patientId: input.patientId,
+        practitionerId: input.practitionerId,
+        roomId: input.roomId,
+        appointmentTypeId: input.appointmentTypeId,
+        startAt: input.startAt,
+        endAt: input.endAt,
+        notes: input.notes,
+      },
+    });
   });
 }
 

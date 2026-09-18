@@ -1,110 +1,92 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { listAppointmentsForDay } from "@dentalos/database";
+import { listAppointmentTypes, listAppointmentsForRange, listPractitioners, listRooms } from "@dentalos/database";
 
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 
-import { StatusActions } from "./StatusActions";
-
-const STATUS_LABEL: Record<string, string> = {
-  scheduled: "Planifié",
-  confirmed: "Confirmé",
-  arrived: "Arrivé",
-  in_chair: "En fauteuil",
-  completed: "Terminé",
-  cancelled: "Annulé",
-  no_show: "Absent",
-};
+import { AgendaClient, type AppointmentDTO, type ViewMode } from "./AgendaClient";
 
 function parseDateParam(value: string | undefined): Date {
-  if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) return new Date(`${value}T00:00:00.000Z`);
+  if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split("-").map(Number);
+    return new Date(y!, (m ?? 1) - 1, d);
+  }
   const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
   return today;
 }
 
 function toDateParam(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
-function formatTime(date: Date): string {
-  return new Intl.DateTimeFormat("fr-CH", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(date);
+/** Monday-based week start, regardless of locale default. */
+function startOfWeek(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = (day === 0 ? -6 : 1) - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 export default async function AgendaPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string }>;
+  searchParams: Promise<{ view?: string; date?: string }>;
 }): Promise<ReactNode> {
-  const { date: dateParam } = await searchParams;
-  const date = parseDateParam(dateParam);
+  const { view: viewParam, date: dateParam } = await searchParams;
+  const view: ViewMode = viewParam === "day" ? "day" : "week";
+  const anchorDate = parseDateParam(dateParam);
+
+  const rangeStart = view === "day" ? anchorDate : startOfWeek(anchorDate);
+  const rangeEnd = new Date(rangeStart);
+  rangeEnd.setDate(rangeEnd.getDate() + (view === "day" ? 1 : 7));
 
   const clinicId = await getDefaultClinicId();
   const ctx = await requirePermission(clinicId, "agenda.read");
-  const appointments = await listAppointmentsForDay(ctx, date);
 
-  const previousDay = new Date(date);
-  previousDay.setUTCDate(previousDay.getUTCDate() - 1);
-  const nextDay = new Date(date);
-  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  const [appointments, practitioners, rooms, appointmentTypes] = await Promise.all([
+    listAppointmentsForRange(ctx, rangeStart, rangeEnd),
+    listPractitioners(ctx),
+    listRooms(ctx),
+    listAppointmentTypes(ctx),
+  ]);
+
+  const appointmentDTOs: AppointmentDTO[] = appointments.map((a) => ({
+    id: a.id,
+    startAt: a.startAt.toISOString(),
+    endAt: a.endAt.toISOString(),
+    status: a.status,
+    notes: a.notes,
+    patient: a.patient ? { id: a.patient.id, name: `${a.patient.firstName} ${a.patient.lastName}` } : null,
+    practitioner: { id: a.practitioner.id, name: `${a.practitioner.firstName} ${a.practitioner.lastName}` },
+    room: a.room ? { id: a.room.id, name: a.room.name } : null,
+    appointmentType: a.appointmentType
+      ? { id: a.appointmentType.id, name: a.appointmentType.name, color: a.appointmentType.color }
+      : null,
+  }));
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Agenda</h1>
-          <p className="text-sm text-muted-foreground">
-            {new Intl.DateTimeFormat("fr-CH", { dateStyle: "full", timeZone: "UTC" }).format(date)}
-          </p>
-        </div>
-        <Link
-          href={`/agenda/new?date=${toDateParam(date)}`}
-          className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
-        >
-          Nouveau rendez-vous
-        </Link>
-      </div>
-
-      <div className="mb-4 flex items-center gap-3 text-sm">
-        <Link href={`/agenda?date=${toDateParam(previousDay)}`} className="text-primary hover:underline">
-          ← Jour précédent
-        </Link>
-        <Link href={`/agenda?date=${toDateParam(new Date())}`} className="text-primary hover:underline">
-          Aujourd&apos;hui
-        </Link>
-        <Link href={`/agenda?date=${toDateParam(nextDay)}`} className="text-primary hover:underline">
-          Jour suivant →
-        </Link>
-      </div>
-
-      <div className="flex flex-col divide-y divide-border rounded-md border border-border">
-        {appointments.map((appointment) => (
-          <div key={appointment.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <span className="w-14 font-mono text-sm text-muted-foreground">{formatTime(appointment.startAt)}</span>
-            <span className="min-w-[140px] flex-shrink-0 font-medium text-foreground">
-              {appointment.patient ? `${appointment.patient.firstName} ${appointment.patient.lastName}` : "—"}
-            </span>
-            {appointment.appointmentType ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                {appointment.appointmentType.name}
-              </span>
-            ) : null}
-            <span className="text-sm text-muted-foreground">
-              {appointment.practitioner.firstName} {appointment.practitioner.lastName}
-            </span>
-            <span className="text-xs font-semibold text-muted-foreground">
-              {STATUS_LABEL[appointment.status] ?? appointment.status}
-            </span>
-            <span className="flex-grow" />
-            <StatusActions appointmentId={appointment.id} status={appointment.status} />
-          </div>
-        ))}
-        {appointments.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">Aucun rendez-vous ce jour.</p>
-        ) : null}
-      </div>
+    <main className="mx-auto max-w-[1500px] px-4 py-6">
+      <AgendaClient
+        view={view}
+        anchorDate={toDateParam(anchorDate)}
+        rangeStartIso={rangeStart.toISOString()}
+        appointments={appointmentDTOs}
+        practitioners={practitioners.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }))}
+        rooms={rooms.map((r) => ({ id: r.id, name: r.name }))}
+        appointmentTypes={appointmentTypes.map((t) => ({
+          id: t.id,
+          name: t.name,
+          color: t.color,
+          defaultDurationMinutes: t.defaultDurationMinutes,
+        }))}
+      />
     </main>
   );
 }
