@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import {
   addAlert,
   computeTariffItemPrice,
+  createDocumentRecord,
   createInvoiceFromQuote,
   createNote,
   createQuoteFromPlanOption,
@@ -13,16 +14,20 @@ import {
   getTariffItem,
   recordPayment,
   recordToothCondition,
+  updateDocument,
   updateMedicalProfile,
+  updateTreatmentPlanItemStatus,
   validateInvoice,
 } from "@dentalos/database";
 import type { DentalConditionType, TreatmentPlanItemInput } from "@dentalos/database";
 
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
-import { addAlertSchema, updateMedicalProfileSchema } from "@/lib/validation/medical-profile";
+import { addAlertSchema, parseMedicalProfileFormData } from "@/lib/validation/medical-profile";
 import { createNoteSchema, createTreatmentPlanSchema } from "@/lib/validation/clinical";
 import { recordPaymentSchema } from "@/lib/validation/billing";
+import { MAX_DOCUMENT_SIZE_BYTES, updateDocumentSchema, uploadDocumentSchema } from "@/lib/validation/documents";
+import { getStorageProvider } from "@/lib/storage";
 
 export interface ActionState {
   error?: string;
@@ -49,7 +54,7 @@ export async function updateMedicalProfileAction(
   _prevState: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const parsed = updateMedicalProfileSchema.safeParse(Object.fromEntries(formData.entries()));
+  const parsed = parseMedicalProfileFormData(formData);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
 
   const clinicId = await getDefaultClinicId();
@@ -158,6 +163,16 @@ export async function createTreatmentPlanAction(
   return {};
 }
 
+/** ÉTAPE 6 : marque un acte planifié comme réalisé — crée son `Treatment` dans le même mouvement
+ * (voir updateTreatmentPlanItemStatus), donc le statut affiché passe aussitôt de « Prévu » à
+ * « À facturer ». */
+export async function markTreatmentPlanItemCompletedAction(patientId: string, itemId: string): Promise<void> {
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "clinical.write");
+  await updateTreatmentPlanItemStatus(ctx, itemId, "completed", ctx.userId);
+  revalidatePath(`/patients/${patientId}`);
+}
+
 export async function createQuoteAction(patientId: string, treatmentPlanOptionId: string): Promise<void> {
   const clinicId = await getDefaultClinicId();
   const ctx = await requirePermission(clinicId, "clinical.write");
@@ -203,4 +218,89 @@ export async function recordPaymentAction(
 
   revalidatePath(`/patients/${patientId}`);
   return {};
+}
+
+/**
+ * ÉTAPE 5 : upload réel — le fichier est écrit sur disque via `StorageProvider` avant que la
+ * moindre ligne n'atteigne la base (`createDocumentRecord` ne fait qu'enregistrer les métadonnées,
+ * jamais le contenu), donc un enregistrement en base ne peut jamais pointer vers des octets qui
+ * n'ont pas été écrits.
+ */
+export async function uploadDocumentAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Sélectionne un fichier." };
+  }
+  if (file.size > MAX_DOCUMENT_SIZE_BYTES) {
+    return { error: `Fichier trop volumineux (max ${MAX_DOCUMENT_SIZE_BYTES / (1024 * 1024)} Mo).` };
+  }
+
+  const parsed = uploadDocumentSchema.safeParse({
+    category: formData.get("category"),
+    comment: formData.get("comment"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "clinical.write");
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const uploadResult = await getStorageProvider().upload({
+    buffer,
+    fileName: file.name,
+    mimeType: file.type || "application/octet-stream",
+    organizationId: ctx.organizationId,
+  });
+
+  await createDocumentRecord(
+    ctx,
+    {
+      patientId,
+      category: parsed.data.category,
+      fileName: file.name,
+      storageKey: uploadResult.storageKey,
+      mimeType: file.type || "application/octet-stream",
+      sizeBytes: uploadResult.sizeBytes,
+      contentHash: uploadResult.contentHash,
+      comment: parsed.data.comment,
+    },
+    ctx.userId,
+  );
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** Covers "renommer" et "classer" (ÉTAPE 5) — un petit formulaire par ligne de document. */
+export async function updateDocumentAction(
+  patientId: string,
+  documentId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = updateDocumentSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "clinical.write");
+  await updateDocument(ctx, documentId, parsed.data);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** "Archiver" / "désarchiver" (ÉTAPE 5) — un bouton en un clic, pas un formulaire. */
+export async function setDocumentArchivedAction(
+  patientId: string,
+  documentId: string,
+  isArchived: boolean,
+): Promise<void> {
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "clinical.write");
+  await updateDocument(ctx, documentId, { isArchived });
+  revalidatePath(`/patients/${patientId}`);
 }

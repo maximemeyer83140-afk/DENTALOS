@@ -16,14 +16,18 @@ import {
   listPaymentsForPatient,
   listPractitioners,
   listQuotesForPatient,
+  listSoinsForPatient,
   listTreatmentPlansForPatient,
+  SOIN_STATUS_LABEL,
 } from "@dentalos/database";
-import type { AppointmentStatus, DentalConditionType } from "@dentalos/database";
+import type { AppointmentStatus, DentalConditionType, SoinStatus } from "@dentalos/database";
 
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 
 import { AlertForm } from "./AlertForm";
+import { DocumentRow } from "./DocumentRow";
+import { DocumentUpload } from "./DocumentUpload";
 import { InvoiceButton } from "./InvoiceButton";
 import { ValidateInvoiceButton } from "./InvoiceActions";
 import { MedicalProfileForm } from "./MedicalProfileForm";
@@ -32,6 +36,7 @@ import { FinalizeNoteButton } from "./NoteActions";
 import { Odontogram } from "./Odontogram";
 import { PaymentForm } from "./PaymentForm";
 import { QuoteButton } from "./QuoteButton";
+import { MarkSoinCompletedButton } from "./SoinActions";
 import { TreatmentPlanForm, type TariffItemOption } from "./TreatmentPlanForm";
 
 /**
@@ -82,6 +87,16 @@ const ALERT_SEVERITY_CLASS: Record<string, string> = {
   info: "bg-blue-50 text-blue-700",
   warning: "bg-amber-50 text-amber-700",
   critical: "bg-red-50 text-red-700",
+};
+
+// ÉTAPE 6 : statut explicite par soin/acte.
+const SOIN_STATUS_CLASS: Record<SoinStatus, string> = {
+  planned: "bg-muted text-muted-foreground",
+  done: "bg-blue-50 text-blue-700",
+  to_invoice: "bg-amber-50 text-amber-700",
+  invoiced: "bg-indigo-50 text-indigo-700",
+  paid: "bg-green-50 text-green-700",
+  cancelled: "bg-red-50 text-red-700",
 };
 
 // Mirrors AgendaClient.tsx's STATUS_LABEL so an appointment reads the same way in the calendar
@@ -148,13 +163,20 @@ export default async function PatientDetailPage({
       <div className="flex flex-col gap-6">
         <MedicalProfileForm
           patientId={id}
+          pathologies={(profile?.pathologies as Record<string, { present: boolean; notes?: string }>) ?? {}}
+          medications={(profile?.medications as { name: string; dose?: string; frequency?: string; comment?: string }[]) ?? []}
           allergies={profile?.allergies ?? []}
-          medications={profile?.medications ?? []}
-          conditions={profile?.conditions ?? []}
+          pastSurgeries={profile?.pastSurgeries ?? []}
+          treatingPhysician={profile?.treatingPhysician ?? null}
           riskNotes={profile?.riskNotes ?? null}
           isPregnant={profile?.isPregnant ?? null}
           isSmoker={profile?.isSmoker ?? null}
+          alcoholUse={profile?.alcoholUse ?? null}
           onAnticoagulants={profile?.onAnticoagulants ?? null}
+          onAntiplatelets={profile?.onAntiplatelets ?? null}
+          updatedAt={profile?.updatedAt ?? null}
+          updatedBy={profile?.updatedBy ?? null}
+          version={profile?.version ?? 1}
         />
         <div>
           <h2 className="mb-2 text-sm font-semibold text-foreground">
@@ -189,10 +211,11 @@ export default async function PatientDetailPage({
       </div>
     );
   } else if (tab === "clinique") {
-    const [chart, notes, practitioners] = await Promise.all([
+    const [chart, notes, practitioners, soins] = await Promise.all([
       getCurrentChart(ctx, id),
       listNotesForPatient(ctx, id),
       listPractitioners(ctx),
+      listSoinsForPatient(ctx, id),
     ]);
     const conditions: Record<number, DentalConditionType> = {};
     for (const entry of chart?.entries ?? []) {
@@ -226,6 +249,59 @@ export default async function PatientDetailPage({
             {notes.length === 0 ? <li className="text-sm text-muted-foreground">Aucune note.</li> : null}
           </ul>
           <NoteForm patientId={id} practitioners={practitionerOptions} />
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">
+            Statut des soins ({soins.length})
+          </h2>
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                  <th className="px-3 py-2">Acte</th>
+                  <th className="px-3 py-2">Dent</th>
+                  <th className="px-3 py-2">Praticien</th>
+                  <th className="px-3 py-2">Code</th>
+                  <th className="px-3 py-2">Prix</th>
+                  <th className="px-3 py-2">Réalisé le</th>
+                  <th className="px-3 py-2">Statut</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {soins.map((soin) => (
+                  <tr key={soin.id} className="border-b border-border last:border-0">
+                    <td className="px-3 py-2 text-foreground">{soin.description}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{soin.toothNumber ?? "—"}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{soin.practitionerName}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{soin.tariffCode ?? "—"}</td>
+                    <td className="px-3 py-2 font-mono">
+                      CHF {(soin.unitPrice * soin.quantity).toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {soin.performedAt ? formatDate(soin.performedAt) : "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${SOIN_STATUS_CLASS[soin.status]}`}>
+                        {SOIN_STATUS_LABEL[soin.status]}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      {soin.status === "planned" ? <MarkSoinCompletedButton patientId={id} itemId={soin.id} /> : null}
+                    </td>
+                  </tr>
+                ))}
+                {soins.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                      Aucun soin planifié pour ce patient.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
@@ -346,26 +422,30 @@ export default async function PatientDetailPage({
       </div>
     );
   } else if (tab === "documents") {
-    const documents = await listDocumentsForPatient(ctx, id);
+    const allDocuments = await listDocumentsForPatient(ctx, id, { includeArchived: true });
+    const activeDocuments = allDocuments.filter((d) => !d.isArchived);
+    const archivedDocuments = allDocuments.filter((d) => d.isArchived);
     tabContent = (
-      <div className="flex flex-col gap-2">
-        <p className="text-xs text-muted-foreground">
-          L&apos;envoi de fichiers arrive avec le branchement d&apos;un vrai fournisseur de
-          stockage — l&apos;interface <code>StorageProvider</code> existe déjà côté serveur.
-        </p>
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {documents.map((doc) => (
-            <li key={doc.id} className="flex items-center justify-between px-3 py-2 text-sm">
-              <span className="font-medium text-foreground">{doc.fileName}</span>
-              <span className="text-xs text-muted-foreground">
-                {doc.category} · {formatDate(doc.createdAt)}
-              </span>
-            </li>
+      <div className="flex flex-col gap-4">
+        <DocumentUpload patientId={id} />
+        <ul className="flex flex-col gap-2">
+          {activeDocuments.map((doc) => (
+            <DocumentRow key={doc.id} patientId={id} document={doc} />
           ))}
-          {documents.length === 0 ? (
+          {activeDocuments.length === 0 ? (
             <li className="px-3 py-6 text-center text-sm text-muted-foreground">Aucun document.</li>
           ) : null}
         </ul>
+        {archivedDocuments.length > 0 ? (
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-foreground">Archivés ({archivedDocuments.length})</h2>
+            <ul className="flex flex-col gap-2">
+              {archivedDocuments.map((doc) => (
+                <DocumentRow key={doc.id} patientId={id} document={doc} />
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     );
   } else if (tab === "rdv") {

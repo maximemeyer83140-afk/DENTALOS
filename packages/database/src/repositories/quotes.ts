@@ -60,6 +60,10 @@ export async function createQuoteFromPlanOption(
                   description: item.description,
                   toothNumber: item.toothNumber,
                   tariffItemId: item.tariffItemId,
+                  // Traces this quote line back to the plan item it was built from (ÉTAPE 6) —
+                  // without it, an invoice created from this quote later has no way to find the
+                  // Treatment (if any) that was actually performed for it.
+                  treatmentPlanItemId: item.id,
                   quantity: item.quantity,
                   unitPrice: item.unitPrice,
                   lineTotal: Number(item.unitPrice) * item.quantity,

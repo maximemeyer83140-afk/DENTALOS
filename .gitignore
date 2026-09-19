@@ -36,3 +36,6 @@ pnpm-debug.log*
 .turbo/
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+# Uploaded patient documents (LocalDevStorageProvider, dev-only — never a real deployment target)
+.data/

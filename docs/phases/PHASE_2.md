@@ -197,3 +197,126 @@ bloqués dans ce bac à sable (accès npm refusé). Vérification faite via
 `node --experimental-strip-types --check` (fichiers `.ts`) et un script Python de vérification
 d'équilibre des accolades/parenthèses/crochets pour les fichiers `.tsx` — pas un remplacement
 complet d'un vrai typecheck TypeScript, à relancer dès que l'accès npm est rétabli.
+
+## Addendum — anamnèse structurée et documents patient (ÉTAPES 4 et 5 d'un plan en plusieurs
+étapes : Agenda → Fiche patient, sur demande explicite de l'utilisateur ; ÉTAPES 1-3 traitées dans
+les addenda précédents de PHASE_3.md et de ce fichier)
+
+### ÉTAPE 4 — anamnèse médicale structurée
+
+`PatientMedicalProfile` était un simple triplet de listes de texte libre (allergies/médicaments/
+conditions) — exactement ce que l'énoncé refuse explicitement (« je ne veux surtout pas un simple
+champ texte »). Remplacé par un vrai questionnaire.
+
+#### Changements base de données
+
+- `PatientMedicalProfile` : `conditions: String[]` remplacé par `pathologies: Json` (un objet
+  `{ [code]: { present: boolean, notes?: string } }` couvrant les 13 items de l'énoncé — maladies
+  cardiovasculaires, hypertension, diabète, troubles de la coagulation, maladies respiratoires,
+  rénales, hépatiques, épilepsie, immunodépression, maladies infectieuses, cancer, allergies,
+  autres — liste centralisée dans `apps/web/src/lib/anamnese.ts`) ; `medications: String[]`
+  remplacé par `medications: Json` (liste structurée nom/dose/fréquence/commentaire) ; ajout de
+  `alcoholUse`, `onAntiplatelets`, `pastSurgeries`, `treatingPhysician`. `allergies`, `isPregnant`,
+  `isSmoker`, `onAnticoagulants`, `riskNotes`, le versionnement (`version`/`updatedAt`/
+  `updatedBy` + `PatientMedicalProfileRevision`) sont inchangés.
+- `MedicalAlert` : ajout de `sourceKey String?` — distingue une alerte créée automatiquement à
+  partir de l'anamnèse d'une alerte ajoutée à la main via `AlertForm` (qui garde `sourceKey: null`)
+  ; voir plus bas.
+
+#### API / logique serveur
+
+- `packages/database/src/repositories/medical-alerts.ts` — nouvelle fonction `syncDerivedAlerts` :
+  à chaque mise à jour du profil médical, calcule quatre signaux (allergie, anticoagulant,
+  antiagrégant, grossesse) et crée/désactive l'alerte correspondante en conséquence — jamais une
+  alerte ajoutée manuellement (`sourceKey: null` n'est jamais touchée). C'est ce qui produit
+  automatiquement les bandeaux « ⚠ ALLERGIE : PÉNICILLINE » / « ⚠ TRAITEMENT ANTICOAGULANT » de
+  l'énoncé, sans action séparée de l'utilisateur.
+- `packages/database/src/repositories/medical-profile.ts` — réécrit : `updateMedicalProfile`
+  accepte désormais les nouveaux champs structurés, garde le même principe de versionnement
+  (snapshot complet avant écrasement), et appelle `syncDerivedAlerts` dans la même transaction.
+- `apps/web/src/lib/anamnese.ts` — `PATHOLOGY_DEFS` (les 13 pathologies) et une liste de
+  mots-clés (anticoagulant, corticoïde, bisphosphonate…) utilisée uniquement pour un surlignage
+  visuel des médicaments à vérifier dans la fiche — jamais une décision clinique automatique,
+  conformément à l'énoncé.
+- `apps/web/src/lib/validation/medical-profile.ts` — `parseMedicalProfileFormData` : construit les
+  objets `pathologies`/`medications` à partir du `FormData` brut (`path_<code>`/`path_<code>_notes`
+  par pathologie, `medName`/`medDose`/`medFrequency`/`medComment` en tableaux parallèles pour la
+  liste de médicaments) plutôt que le `Object.fromEntries(formData.entries())` utilisé ailleurs
+  dans l'app, qui ne garde que la dernière valeur d'un champ répété — invalidant justement le
+  motif « tableaux parallèles » dont la liste de médicaments a besoin.
+
+#### UI
+
+- `apps/web/src/app/patients/[id]/MedicalProfileForm.tsx` — réécrit : une ligne case à cocher +
+  précision par pathologie ; liste de médicaments à lignes ajoutables/supprimables (surlignées en
+  ambre si le nom correspond à une catégorie sensible) ; allergies et interventions chirurgicales
+  en zones de texte (une par ligne, même convention que le reste de l'app) ; médecin traitant,
+  commentaires, et cases à cocher anticoagulants/antiagrégants/grossesse/tabac/alcool ; date et
+  auteur de la dernière mise à jour affichés en tête de formulaire (anamnèse « datée et
+  historisée »).
+
+### ÉTAPE 5 — documents patient
+
+Le stockage de fichiers existait déjà côté serveur (`StorageProvider`/`LocalDevStorageProvider`,
+Phase 2 initiale) mais rien ne l'utilisait — l'onglet Documents se contentait d'un message
+expliquant que l'upload « arrive avec le branchement d'un vrai fournisseur de stockage ». Cette
+étape branche réellement l'upload sur ce fournisseur (en développement local, `LocalDevStorageProvider`
+écrit sur disque — voir son propre commentaire pour la limite avant un vrai déploiement).
+
+#### Changements base de données
+
+`Document` : ajout de `comment String?` et `isArchived Boolean @default(false)` (l'« archiver » de
+l'énoncé — un document archivé n'est jamais supprimé, seulement caché de la liste par défaut).
+
+#### API / logique serveur
+
+- `packages/database/src/repositories/documents.ts` — `createDocumentRecord` accepte un
+  commentaire ; nouvelles fonctions `getDocument` (lecture tenant-scopée unique, utilisée par la
+  route de téléchargement) et `updateDocument` (renommer/classer/archiver — une seule fonction,
+  aucune des trois n'écrit dans les octets du fichier) ; `listDocumentsForPatient` prend une
+  option `includeArchived`.
+- `apps/web/src/lib/storage.ts` — instancie `LocalDevStorageProvider` une fois, racine
+  `.data/uploads/` (ajouté au `.gitignore` — jamais commité).
+- `apps/web/src/app/patients/[id]/actions.ts` — `uploadDocumentAction` (écrit le fichier via
+  `StorageProvider` avant d'enregistrer la moindre ligne en base — impossible qu'un enregistrement
+  pointe vers des octets jamais écrits), `updateDocumentAction`, `setDocumentArchivedAction`.
+- `apps/web/src/app/patients/[id]/documents/[documentId]/route.ts` — route de lecture/
+  téléchargement : résout toujours le document via `getDocument` (tenant-scopé) puis vérifie qu'il
+  appartient bien au `patientId` de l'URL avant de streamer ses octets — un id deviné ou copié ne
+  peut jamais servir le fichier d'un autre patient (« ne pas mélanger les fichiers de différents
+  patients »). `?download=1` bascule `Content-Disposition` en pièce jointe.
+
+#### UI
+
+- `apps/web/src/app/patients/[id]/DocumentUpload.tsx` — formulaire d'upload (fichier, type,
+  commentaire facultatif).
+- `apps/web/src/app/patients/[id]/DocumentRow.tsx` — une ligne par document : liens Visualiser/
+  Télécharger, bouton Renommer/classer (dévoile un mini-formulaire inline), bouton Archiver/
+  Désarchiver.
+- Onglet Documents : liste des documents actifs + section « Archivés » repliable si au moins un
+  document y est.
+
+### Permissions
+
+Inchangées : lecture sous `patients.read`, écriture (anamnèse, alertes, documents) sous
+`clinical.write`.
+
+### Tests
+
+- `packages/database/src/repositories/medical-profile.test.ts` (étendu) : stockage des pathologies/
+  médicaments structurés ; une alerte est créée automatiquement quand l'anamnèse indique une
+  allergie et désactivée quand elle est retirée ; anticoagulants et antiagrégants produisent deux
+  alertes indépendantes ; une alerte ajoutée à la main n'est jamais désactivée par la
+  synchronisation automatique.
+- `packages/database/src/repositories/documents.test.ts` (nouveau) : un document reste attaché à
+  son patient et à son organisation ; renommer/classer ne touche jamais `storageKey` ; archiver
+  cache un document de la liste par défaut sans le supprimer ; jamais de fuite entre organisations
+  sur `getDocument`/`updateDocument`.
+
+### Limitation connue
+
+`LocalDevStorageProvider` écrit sur le disque local du processus serveur — adapté au développement,
+pas à la production (voir son propre commentaire) ; passer à un vrai fournisseur S3/Azure Blob ne
+change que `apps/web/src/lib/storage.ts`, aucun appelant. `pnpm install`/`typecheck`/`lint`/`test`/
+`build` restent bloqués dans ce bac à sable — mêmes vérifications de substitution que les étapes
+précédentes.

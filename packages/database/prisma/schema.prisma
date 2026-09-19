@@ -406,19 +406,28 @@ model Patient {
 
 /// Structured, versioned medical questionnaire. A new version is written on every material change;
 /// never overwritten silently (see MedicalProfileRevision).
+/// ÉTAPE 4 : questionnaire médical structuré, pas un simple champ texte. `pathologies` is a
+/// `{ [code]: { present: boolean, notes?: string } }` object keyed by the fixed 13-item list in
+/// apps/web/src/lib/anamnese.ts (PATHOLOGY_DEFS) — kept as Json rather than one column per
+/// pathology so the list can grow without a migration each time. `medications` is a
+/// `{ name, dose?, frequency?, comment? }[]` array, replacing the old flat string list.
 model PatientMedicalProfile {
-  id             String   @id @default(cuid())
-  patientId      String   @unique
-  allergies      String[]
-  medications    String[]
-  conditions     String[]
-  isPregnant     Boolean?
-  isSmoker       Boolean?
-  onAnticoagulants Boolean?
-  riskNotes      String?
-  version        Int      @default(1)
-  updatedAt      DateTime @updatedAt
-  updatedBy      String?
+  id                String   @id @default(cuid())
+  patientId         String   @unique
+  pathologies       Json     @default("{}")
+  medications       Json     @default("[]")
+  allergies         String[]
+  isPregnant        Boolean?
+  isSmoker          Boolean?
+  alcoholUse        Boolean?
+  onAnticoagulants  Boolean?
+  onAntiplatelets   Boolean?
+  pastSurgeries     String[]
+  treatingPhysician String?
+  riskNotes         String?
+  version           Int      @default(1)
+  updatedAt         DateTime @updatedAt
+  updatedBy         String?
 
   patient   Patient                   @relation(fields: [patientId], references: [id], onDelete: Cascade)
   revisions PatientMedicalProfileRevision[]
@@ -449,12 +458,18 @@ model MedicalAlert {
   label     String
   severity  MedicalAlertSeverity @default(warning)
   isActive  Boolean           @default(true)
+  /// Set only on alerts the system derives automatically from the anamnèse (allergy,
+  /// anticoagulant, antiplatelet, pregnancy — see medical-alerts.ts's syncDerivedAlerts). Null for
+  /// alerts a user added manually via AlertForm; syncing only ever touches alerts carrying a key it
+  /// recognizes, so it can never clobber a manual entry.
+  sourceKey String?
   createdAt DateTime          @default(now())
   createdBy String?
 
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
   @@index([patientId])
+  @@index([patientId, sourceKey])
   @@map("medical_alerts")
 }
 
@@ -743,6 +758,7 @@ model TreatmentPlanItem {
   tariffItem          TariffItem?         @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
   practitioner        Practitioner?       @relation(fields: [practitionerId], references: [id], onDelete: SetNull)
   treatments          Treatment[]
+  quoteItems          QuoteItem[]
 
   @@index([treatmentPlanOptionId])
   @@map("treatment_plan_items")
@@ -813,19 +829,25 @@ model Quote {
 }
 
 model QuoteItem {
-  id           String  @id @default(cuid())
-  quoteId      String
-  description  String
-  tariffItemId String?
-  toothNumber  Int?
-  quantity     Int     @default(1)
-  unitPrice    Decimal @db.Decimal(12, 2)
-  lineTotal    Decimal @db.Decimal(12, 2)
+  id                    String  @id @default(cuid())
+  quoteId               String
+  description           String
+  tariffItemId          String?
+  /// Traces this line back to the TreatmentPlanItem it was copied from (ÉTAPE 6) — without it,
+  /// nothing links a quoted/invoiced line back to the planned act it billed, which is exactly the
+  /// "duplication incohérente entre traitement, facture et paiement" the brief warns against.
+  treatmentPlanItemId   String?
+  toothNumber           Int?
+  quantity              Int     @default(1)
+  unitPrice             Decimal @db.Decimal(12, 2)
+  lineTotal             Decimal @db.Decimal(12, 2)
 
-  quote      Quote       @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  tariffItem TariffItem? @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
+  quote             Quote              @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  tariffItem        TariffItem?        @relation(fields: [tariffItemId], references: [id], onDelete: SetNull)
+  treatmentPlanItem TreatmentPlanItem? @relation(fields: [treatmentPlanItemId], references: [id], onDelete: SetNull)
 
   @@index([quoteId])
+  @@index([treatmentPlanItemId])
   @@map("quote_items")
 }
 
@@ -1136,6 +1158,11 @@ model Document {
   mimeType       String
   sizeBytes      Int
   contentHash    String?
+  /// Free-text note about the document (ÉTAPE 5) — e.g. why it was kept, what it shows.
+  comment        String?
+  /// Archived documents (ÉTAPE 5's "archiver") are kept, never deleted, just hidden from the
+  /// default patient document list.
+  isArchived     Boolean         @default(false)
   version        Int             @default(1)
   createdAt      DateTime        @default(now())
   createdBy      String?

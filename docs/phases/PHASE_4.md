@@ -76,3 +76,81 @@ existent depuis la Phase 0 (relations `practitioner` ajoutées en Phase 3).
 - [x] Tests de versionnement, de révision de notes et de numérotation de devis écrits
 - [ ] `pnpm install && pnpm db:migrate && pnpm test` exécutés avec succès — **toujours bloqué**
       (même limitation réseau que les phases précédentes).
+
+## Addendum — statuts explicites des soins et actes (ÉTAPE 6 d'un plan en plusieurs étapes :
+Agenda → Fiche patient, sur demande explicite de l'utilisateur ; ÉTAPES 1-5 traitées dans les
+addenda précédents de PHASE_3.md et PHASE_2.md)
+
+L'énoncé demande de voir immédiatement, par acte : prévu / réalisé / à facturer / facturé / payé —
+et prévient explicitement contre toute « duplication incohérente entre traitement, facture et
+paiement ». Or la chaîne `TreatmentPlanItem` (ligne planifiée) → `Quote`/`QuoteItem` (devis) →
+`Invoice`/`InvoiceItem` (facture) existait déjà (Phases 4 et 5) mais ne se référençait jamais
+elle-même : un `QuoteItem` ne savait pas de quel `TreatmentPlanItem` il venait, une facture ne
+savait pas quel acte elle facturait, et le modèle `Treatment` (l'acte réellement effectué — dent,
+date, praticien, code tarifaire, prix, statut, exactement les champs demandés par l'énoncé)
+existait dans le schéma depuis la Phase 0 mais n'était écrit nulle part. Cette étape ferme cette
+chaîne plutôt que d'ajouter un système de suivi parallèle — la source du problème que l'énoncé
+signale.
+
+### Changements base de données
+
+- `QuoteItem` : ajout de `treatmentPlanItemId String?` — trace la ligne de devis jusqu'à la ligne
+  de plan dont elle vient.
+- Aucun autre changement : `Treatment.treatmentPlanItemId` et `InvoiceItem.treatmentId`
+  existaient déjà dans le schéma, simplement jamais renseignés par le code applicatif.
+
+### API / logique serveur
+
+- `packages/database/src/repositories/treatments.ts` (nouveau) — `createTreatment`,
+  `listTreatmentsForPatient`.
+- `packages/database/src/repositories/treatment-plans.ts` :
+  - `createTreatmentPlan` crée désormais, dans la même transaction, un `Treatment` pour chaque
+    ligne créée directement au statut `completed` (mode « Traitement » — un acte effectué le jour
+    même, par opposition à « Devis » — une proposition).
+  - `updateTreatmentPlanItemStatus` (signature étendue avec `updatedBy`) crée ce même `Treatment`
+    au moment où une ligne planifiée passe à `completed`, si elle n'en a pas déjà un.
+  - Nouvelle fonction `listSoinsForPatient` : tous les actes du patient, à plat, avec le statut
+    ÉTAPE 6 calculé par ligne.
+- `packages/database/src/services/treatment-status.ts` (nouveau) — `computeSoinStatus`, fonction
+  pure (aucun accès base, testée isolément) qui dérive le statut affiché uniquement de ce que la
+  chaîne réelle contient : pas encore réalisé → **Prévu** ; réalisé sans `Treatment` lié (ne
+  devrait arriver que sur d'anciennes données antérieures à ce lien) → **Réalisé** ; `Treatment`
+  existant sans ligne de facture → **À facturer** ; facturé mais facture non soldée → **Facturé** ;
+  facture au statut `paid` → **Payé** ; ligne de plan annulée/refusée → **Annulé**.
+- `packages/database/src/repositories/quotes.ts` — `createQuoteFromPlanOption` copie désormais
+  `treatmentPlanItemId` sur chaque `QuoteItem`.
+- `packages/database/src/repositories/invoices.ts` — `createInvoiceFromQuote` retrouve, pour
+  chaque ligne de devis, le `Treatment` déjà créé pour la même ligne de plan (s'il existe) et
+  renseigne `InvoiceItem.treatmentId` en conséquence.
+
+### UI
+
+- `apps/web/src/app/patients/[id]/page.tsx` (onglet « Clinique / Soins ») : tableau « Statut des
+  soins » sous l'odontogramme et les notes — acte, dent, praticien, code tarifaire, prix, date de
+  réalisation, statut (badge coloré), et un bouton « Marquer réalisé » sur les lignes encore
+  « Prévu ».
+- `apps/web/src/app/patients/[id]/SoinActions.tsx` (nouveau) — `MarkSoinCompletedButton`, action
+  en un clic (même style que `FinalizeNoteButton`).
+
+### Permissions
+
+Inchangées : `clinical.write` pour marquer un acte réalisé (même permission que le reste du
+dossier clinique).
+
+### Tests
+
+- `packages/database/src/services/treatment-status.test.ts` (nouveau) — les six statuts de
+  `computeSoinStatus`, sans base de données.
+- `packages/database/src/repositories/treatment-plans.test.ts` (nouveau) — un acte créé
+  directement en mode Traitement obtient son `Treatment` ; un acte planifié marqué réalisé plus
+  tard en obtient un aussi (jamais deux) ; un acte suivi du bout en bout (prévu → à facturer →
+  facturé → payé) au fur et à mesure que devis puis facture puis paiement sont enregistrés ;
+  jamais de fuite entre organisations sur `listSoinsForPatient`.
+
+### Limitation connue
+
+`computeSoinStatus` simplifie « payé » au niveau de la facture entière (`Invoice.status === "paid"`),
+pas au prorata de paiements partiels par ligne — cohérent avec le reste de l'app (`PaymentForm`
+paie des factures, pas des lignes individuelles) mais à revisiter si un jour la facturation doit
+suivre un paiement partiel acte par acte. `pnpm install`/`typecheck`/`lint`/`test`/`build` restent
+bloqués dans ce bac à sable — mêmes vérifications de substitution que les étapes précédentes.

@@ -49,6 +49,23 @@ export async function createInvoiceFromQuote(
   if (!quote) throw new NotFoundError(`Quote ${quoteId} not found`);
   if (quote.items.length === 0) throw new Error("Cannot invoice a quote with no items");
 
+  const treatmentPlanItemIds = quote.items
+    .map((item) => item.treatmentPlanItemId)
+    .filter((itemId): itemId is string => itemId !== null);
+  // ÉTAPE 6 : quand l'acte a déjà été réalisé (un Treatment existe pour la ligne de plan
+  // correspondante), la facture qui en découle pointe dessus — sinon la ligne facturée n'a aucun
+  // moyen de retrouver l'acte qu'elle facture, exactement la « duplication incohérente entre
+  // traitement, facture et paiement » que le cahier des charges demande d'éviter.
+  const treatments =
+    treatmentPlanItemIds.length > 0
+      ? await prisma.treatment.findMany({ where: { treatmentPlanItemId: { in: treatmentPlanItemIds } } })
+      : [];
+  const treatmentIdByPlanItemId = new Map(
+    treatments
+      .filter((t) => t.treatmentPlanItemId !== null)
+      .map((t) => [t.treatmentPlanItemId as string, t.id]),
+  );
+
   for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt++) {
     try {
       return await prisma.$transaction(
@@ -73,6 +90,9 @@ export async function createInvoiceFromQuote(
                   description: item.description,
                   toothNumber: item.toothNumber,
                   tariffItemId: item.tariffItemId,
+                  treatmentId: item.treatmentPlanItemId
+                    ? treatmentIdByPlanItemId.get(item.treatmentPlanItemId)
+                    : undefined,
                   quantity: item.quantity,
                   unitPrice: item.unitPrice,
                   lineTotal: item.lineTotal,

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { prisma } from "../index";
+import { listActiveAlerts } from "./medical-alerts";
 import { getMedicalProfile, listMedicalProfileRevisions, updateMedicalProfile } from "./medical-profile";
 import { createPatient } from "./patients";
 
@@ -74,5 +75,44 @@ describe("medical profile versioning", () => {
     expect(updated.allergies).toEqual(["Pénicilline", "Latex"]);
     expect(updated.riskNotes).toBe("Anticoagulants");
     expect(updated.isSmoker).toBe(true);
+  });
+
+  it("stores the structured pathologies questionnaire and medications list", async () => {
+    const updated = await updateMedicalProfile(
+      ctx,
+      patientId,
+      {
+        pathologies: { diabetes: { present: true, notes: "Type 2" }, epilepsy: { present: false } },
+        medications: [{ name: "Eliquis", dose: "5mg", frequency: "2x/jour" }],
+      },
+      "dr-meyer",
+    );
+    expect(updated.pathologies).toEqual({ diabetes: { present: true, notes: "Type 2" }, epilepsy: { present: false } });
+    expect(updated.medications).toEqual([{ name: "Eliquis", dose: "5mg", frequency: "2x/jour" }]);
+  });
+
+  it("auto-creates a banner alert when anamnèse marks the patient allergic, and clears it when unmarked", async () => {
+    await updateMedicalProfile(ctx, patientId, { allergies: ["Pénicilline"] }, "dr-meyer");
+    let alerts = await listActiveAlerts(ctx, patientId);
+    expect(alerts.some((a) => a.label.includes("Pénicilline"))).toBe(true);
+
+    await updateMedicalProfile(ctx, patientId, { allergies: [] }, "dr-meyer");
+    alerts = await listActiveAlerts(ctx, patientId);
+    expect(alerts.some((a) => a.label.toLowerCase().includes("allergie"))).toBe(false);
+  });
+
+  it("auto-creates a banner alert for anticoagulants and antiplatelets independently", async () => {
+    await updateMedicalProfile(ctx, patientId, { onAnticoagulants: true, onAntiplatelets: true }, "dr-meyer");
+    const alerts = await listActiveAlerts(ctx, patientId);
+    expect(alerts.some((a) => a.label === "Traitement anticoagulant")).toBe(true);
+    expect(alerts.some((a) => a.label === "Traitement antiagrégant")).toBe(true);
+  });
+
+  it("never deactivates a manually-added alert when syncing derived ones", async () => {
+    const { addAlert } = await import("./medical-alerts");
+    await addAlert(ctx, patientId, { type: "other", label: "Patient anxieux — prévoir prémédication" }, "dr-meyer");
+    await updateMedicalProfile(ctx, patientId, { riskNotes: "rien de neuf" }, "dr-meyer");
+    const alerts = await listActiveAlerts(ctx, patientId);
+    expect(alerts.some((a) => a.label === "Patient anxieux — prévoir prémédication")).toBe(true);
   });
 });
