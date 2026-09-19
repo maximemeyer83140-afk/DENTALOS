@@ -320,3 +320,57 @@ pas à la production (voir son propre commentaire) ; passer à un vrai fournisse
 change que `apps/web/src/lib/storage.ts`, aucun appelant. `pnpm install`/`typecheck`/`lint`/`test`/
 `build` restent bloqués dans ce bac à sable — mêmes vérifications de substitution que les étapes
 précédentes.
+
+## Addendum — résumé patient (ÉTAPE 9 d'un plan en plusieurs étapes : Agenda → Fiche patient, sur
+demande explicite de l'utilisateur ; ÉTAPES 1-8 traitées dans les addenda précédents de ce fichier
+et de PHASE_3.md/PHASE_4.md/PHASE_5.md)
+
+L'onglet Résumé (construit à l'ÉTAPE 3) couvrait déjà adresse/langue, prochain rendez-vous, nombre
+de plans de traitement actifs, nombre de factures impayées et une timeline d'activité récente.
+L'énoncé de l'ÉTAPE 9 demande explicitement d'y voir aussi : les alertes médicales, le montant
+(pas seulement le nombre) des soins restant à réaliser et des factures ouvertes, la dernière
+consultation, et les documents récents — cette étape complète l'onglet plutôt que de le refaire.
+
+### Changements base de données
+
+Aucun — tout ce qu'il fallait agréger existait déjà via `listActiveAlerts`, `listSoinsForPatient`
+(ÉTAPE 6) et `listDocumentsForPatient` (ÉTAPE 5).
+
+### API / logique serveur
+
+Aucun changement de repository — uniquement de nouveaux calculs dans `page.tsx` à partir de
+fonctions déjà écrites :
+- **Alertes médicales** : `alerts`, déjà chargé pour l'en-tête (ÉTAPE 3), simplement réaffiché
+  dans le corps de l'onglet.
+- **Soins restant à réaliser (CHF)** : somme de `unitPrice × quantity` des lignes que
+  `listSoinsForPatient` (ÉTAPE 6) classe encore `planned` — tout ce qui n'a, par définition, pas
+  encore été réalisé.
+- **Factures ouvertes (CHF)** : somme des soldes des factures `issued`/`partially_paid`/`overdue`
+  (remplace l'ancien simple décompte).
+- **Dernière consultation** : le rendez-vous passé le plus récent qui n'est ni annulé ni marqué
+  absent.
+- **Documents récents** : les 5 documents les plus récents (`listDocumentsForPatient`, non
+  archivés).
+
+### UI
+
+`apps/web/src/app/patients/[id]/page.tsx` (onglet Résumé) : bandeau d'alertes médicales, deux
+nouvelles tuiles chiffrées (Soins restant à réaliser, Factures ouvertes — en CHF), une tuile
+Dernière consultation, et une liste Documents récents, ajoutées aux tuiles déjà là (Prochain
+rendez-vous, Plans de traitement actifs) et à l'activité récente.
+
+### Permissions
+
+Inchangées : `patients.read` pour tout l'onglet.
+
+### Tests
+
+Aucun nouveau test de repository — l'onglet agrège des fonctions déjà testées individuellement
+(`listSoinsForPatient` en ÉTAPE 6, `listDocumentsForPatient` en ÉTAPE 5) ; la logique ajoutée ici
+est un calcul d'affichage (sommes, filtre, tri par date), pas une nouvelle règle métier à couvrir
+séparément.
+
+### Limitation connue
+
+`pnpm install`/`typecheck`/`lint`/`test`/`build` restent bloqués dans ce bac à sable — mêmes
+vérifications de substitution que les étapes précédentes.

@@ -1682,6 +1682,7 @@ enum QuoteStatus {
   draft
   sent
   accepted
+  partially_accepted
   rejected
   expired
 }

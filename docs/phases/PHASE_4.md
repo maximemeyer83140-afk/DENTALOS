@@ -77,7 +77,7 @@ existent depuis la Phase 0 (relations `practitioner` ajoutées en Phase 3).
 - [ ] `pnpm install && pnpm db:migrate && pnpm test` exécutés avec succès — **toujours bloqué**
       (même limitation réseau que les phases précédentes).
 
-## Addendum — statuts explicites des soins et actes (ÉTAPE 6 d'un plan en plusieurs étapes :
+## Addendum 1 — statuts explicites des soins et actes (ÉTAPE 6 d'un plan en plusieurs étapes :
 Agenda → Fiche patient, sur demande explicite de l'utilisateur ; ÉTAPES 1-5 traitées dans les
 addenda précédents de PHASE_3.md et PHASE_2.md)
 
@@ -154,3 +154,59 @@ pas au prorata de paiements partiels par ligne — cohérent avec le reste de l'
 paie des factures, pas des lignes individuelles) mais à revisiter si un jour la facturation doit
 suivre un paiement partiel acte par acte. `pnpm install`/`typecheck`/`lint`/`test`/`build` restent
 bloqués dans ce bac à sable — mêmes vérifications de substitution que les étapes précédentes.
+
+## Addendum 2 — onglet Devis (ÉTAPE 7 d'un plan en plusieurs étapes : Agenda → Fiche patient, sur
+demande explicite de l'utilisateur ; ÉTAPES 1-6 traitées dans les addenda précédents de
+PHASE_3.md, PHASE_2.md et l'addendum 1 ci-dessus)
+
+L'onglet Devis listait déjà les devis (numéro, statut, total), mais sans détail des lignes, sans
+action de changement de statut (`updateQuoteStatus` existait déjà côté repository mais n'était
+jamais appelé par l'UI), et sans les statuts explicitement demandés (« Partiellement accepté »
+n'existait pas encore dans `QuoteStatus`).
+
+### Changements base de données
+
+`QuoteStatus` : ajout de `partially_accepted`.
+
+### API / logique serveur
+
+- `packages/database/src/repositories/quotes.ts` :
+  - `listQuotesForPatient` inclut désormais les lignes de chaque devis (le détail complet demandé
+    en cliquant sur un devis, sans aller-retour supplémentaire).
+  - `updateQuoteStatus` répercute désormais la décision sur les lignes de plan de traitement dont
+    le devis vient (via `QuoteItem.treatmentPlanItemId`, ajouté à l'ÉTAPE 6) : « accepté » fait
+    passer chaque ligne encore `planned` à `accepted`, « refusé » les fait passer à `rejected`.
+    C'est le geste concret derrière « transformer les actes acceptés en plan de traitement » de
+    l'énoncé — les lignes sont déjà des `TreatmentPlanItem`, il n'y a rien de plus à créer,
+    seulement leur statut à faire avancer. Un devis « partiellement accepté » ne cascade rien :
+    sans un accord ligne par ligne (que le modèle actuel ne capture pas), impossible de savoir
+    lesquelles ont été retenues — limitation assumée, notée ci-dessous.
+- `apps/web/src/app/patients/[id]/actions.ts` — `updateQuoteStatusAction`.
+
+### UI
+
+- `apps/web/src/app/patients/[id]/QuoteRow.tsx` (nouveau) — un devis par ligne, dépliable : détail
+  des actes/dents/quantités/prix, boutons de changement de statut (Envoyé, Accepté, Partiellement
+  accepté, Refusé selon l'état courant), bouton Facturer une fois accepté, bouton Imprimer (même
+  mécanisme `window.print()` + `@media print` scopé par id que `TreatmentPlanForm.tsx`).
+- Génération PDF : non implémentée — l'impression navigateur (Ctrl/Cmd+P → « Enregistrer en PDF »)
+  en tient lieu, même limitation que pour le QR-code (bibliothèque PDF non disponible, npm bloqué).
+
+### Permissions
+
+Inchangées : `clinical.write` pour changer le statut d'un devis, `invoices.create` pour le
+facturer.
+
+### Tests
+
+- `packages/database/src/repositories/quotes.test.ts` (étendu) : chaque ligne de devis référence
+  bien la ligne de plan dont elle vient ; accepter un devis fait passer ses lignes planifiées à
+  accepté ; refuser un devis les fait passer à refusé ; un devis partiellement accepté ne touche
+  aucune ligne.
+
+### Limitation connue
+
+« Partiellement accepté » reste un statut d'ensemble sur le devis, pas un accord ligne par ligne —
+capturer précisément quelles lignes ont été retenues demanderait un champ d'acceptation par
+`QuoteItem`, non ajouté ici faute de besoin exprimé à ce niveau de détail. `pnpm install`/
+`typecheck`/`lint`/`test`/`build` restent bloqués dans ce bac à sable.

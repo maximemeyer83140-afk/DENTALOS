@@ -9,3 +9,11 @@ export const recordPaymentSchema = z.object({
     z.string().trim().max(120).optional(),
   ),
 });
+
+export const createCreditNoteSchema = z.object({
+  amount: z.coerce.number().positive("Le montant doit être positif"),
+  reason: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().trim().max(300).optional(),
+  ),
+});

@@ -26,9 +26,12 @@ export async function getInvoice(ctx: TenantContext, invoiceId: string): Promise
   return invoice;
 }
 
-export async function listInvoicesForPatient(ctx: TenantContext, patientId: string): Promise<Invoice[]> {
+/** Includes each invoice's lines — ÉTAPE 8 needs to show "précisément les actes concernés" per
+ * facture without a second round trip. */
+export async function listInvoicesForPatient(ctx: TenantContext, patientId: string): Promise<InvoiceWithItems[]> {
   return prisma.invoice.findMany({
     where: { patientId, organizationId: ctx.organizationId, clinicId: ctx.clinicId },
+    include: { items: true },
     orderBy: { createdAt: "desc" },
   });
 }
@@ -112,6 +115,90 @@ export async function createInvoiceFromQuote(
     }
   }
   throw new Error("createInvoiceFromQuote: exhausted retry attempts without a definitive result");
+}
+
+/**
+ * ÉTAPE 8 : "soins réalisés non facturés" — un acte performé directement en mode "Traitement"
+ * (jamais passé par un devis) n'avait jusqu'ici aucun chemin vers une facture ; `createInvoiceFromQuote`
+ * suppose toujours un devis. Cette fonction facture directement une sélection de `Treatment`
+ * réalisés et pas encore reliés à une ligne de facture — même vérifications qu'un devis (tenant,
+ * jamais deux fois le même acte) sans en passer par une étape de devis inutile pour un acte déjà
+ * effectué.
+ */
+export async function createInvoiceFromTreatments(
+  ctx: TenantContext,
+  patientId: string,
+  treatmentIds: string[],
+  dueDate: Date | undefined,
+  createdBy: string,
+): Promise<InvoiceWithItems> {
+  if (treatmentIds.length === 0) throw new Error("Cannot invoice an empty list of treatments");
+
+  const treatments = await prisma.treatment.findMany({
+    where: {
+      id: { in: treatmentIds },
+      patientId,
+      organizationId: ctx.organizationId,
+      clinicId: ctx.clinicId,
+      status: "completed",
+    },
+    include: { invoiceItems: true },
+  });
+  if (treatments.length !== treatmentIds.length) {
+    throw new NotFoundError("One or more completed treatments not found for this patient");
+  }
+  const alreadyInvoiced = treatments.find((t) => t.invoiceItems.length > 0);
+  if (alreadyInvoiced) throw new Error(`Treatment ${alreadyInvoiced.id} is already invoiced`);
+
+  const totals = calculateInvoiceTotals(
+    treatments.map((t) => ({ quantity: t.quantity, unitPrice: Number(t.unitPrice) })),
+  );
+  const practitionerId = treatments[0]!.practitionerId;
+
+  for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt++) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          const invoiceNumber = await nextInvoiceNumber(tx, ctx.clinicId);
+          return tx.invoice.create({
+            data: {
+              organizationId: ctx.organizationId,
+              clinicId: ctx.clinicId,
+              patientId,
+              practitionerId,
+              invoiceNumber,
+              dueDate,
+              subtotal: totals.subtotal,
+              taxTotal: totals.taxTotal,
+              total: totals.total,
+              amountPaid: 0,
+              balance: totals.total,
+              createdBy,
+              items: {
+                create: treatments.map((t) => ({
+                  description: t.description,
+                  toothNumber: t.toothNumber,
+                  tariffItemId: t.tariffItemId,
+                  treatmentId: t.id,
+                  quantity: t.quantity,
+                  unitPrice: t.unitPrice,
+                  lineTotal: Number(t.unitPrice) * t.quantity,
+                })),
+              },
+            },
+            include: { items: true },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      const isRetryableConflict =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2034" || error.code === "P2002");
+      if (!isRetryableConflict || attempt === MAX_CREATE_ATTEMPTS) throw error;
+    }
+  }
+  throw new Error("createInvoiceFromTreatments: exhausted retry attempts without a definitive result");
 }
 
 /** Only a draft can be edited; the schema's own workflow (section 13) forbids changing an issued

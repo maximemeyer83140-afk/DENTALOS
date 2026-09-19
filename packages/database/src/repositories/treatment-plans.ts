@@ -226,6 +226,10 @@ export async function updateTreatmentPlanItemStatus(
 
 export interface SoinRow {
   id: string;
+  /** The linked `Treatment`'s id, when the act has been realized — ÉTAPE 8 needs this to invoice
+   * a "réalisé non facturé" act directly (`createInvoiceFromTreatments`), separately from
+   * `id` (the plan item this row is about). Null until the act is actually performed. */
+  treatmentId: string | null;
   description: string;
   toothNumber: number | null;
   practitionerName: string;
@@ -274,6 +278,7 @@ export async function listSoinsForPatient(ctx: TenantContext, patientId: string)
     const practitioner = item.practitioner ?? item.treatmentPlanOption.treatmentPlan.practitioner;
     return {
       id: item.id,
+      treatmentId: treatment?.id ?? null,
       description: item.description,
       toothNumber: item.toothNumber,
       practitionerName: `${practitioner.firstName} ${practitioner.lastName}`,

@@ -9,6 +9,7 @@ import {
   listActiveAlerts,
   listActiveTariffItems,
   listAppointmentsForPatient,
+  listCreditNotesForInvoice,
   listDocumentsForPatient,
   listInvoicesForPatient,
   listMedicalProfileRevisions,
@@ -28,16 +29,17 @@ import { requirePermission } from "@/lib/rbac";
 import { AlertForm } from "./AlertForm";
 import { DocumentRow } from "./DocumentRow";
 import { DocumentUpload } from "./DocumentUpload";
-import { InvoiceButton } from "./InvoiceButton";
-import { ValidateInvoiceButton } from "./InvoiceActions";
+import { InvoiceRow } from "./InvoiceRow";
 import { MedicalProfileForm } from "./MedicalProfileForm";
 import { NoteForm } from "./NoteForm";
 import { FinalizeNoteButton } from "./NoteActions";
 import { Odontogram } from "./Odontogram";
 import { PaymentForm } from "./PaymentForm";
 import { QuoteButton } from "./QuoteButton";
+import { QuoteRow } from "./QuoteRow";
 import { MarkSoinCompletedButton } from "./SoinActions";
 import { TreatmentPlanForm, type TariffItemOption } from "./TreatmentPlanForm";
+import { UnbilledSoinsForm } from "./UnbilledSoinsForm";
 
 /**
  * ÉTAPE 3 : la fiche patient devient le centre de toute l'information — huit onglets, chacun
@@ -55,24 +57,6 @@ const TABS = [
   { id: "documents", label: "Documents" },
   { id: "rdv", label: "Rendez-vous" },
 ] as const;
-
-const QUOTE_STATUS_LABEL: Record<string, string> = {
-  draft: "Brouillon",
-  sent: "Envoyé",
-  accepted: "Accepté",
-  rejected: "Refusé",
-  expired: "Expiré",
-};
-
-const INVOICE_STATUS_LABEL: Record<string, string> = {
-  draft: "Brouillon",
-  issued: "Émise",
-  partially_paid: "Partiellement payée",
-  paid: "Payée",
-  overdue: "En retard",
-  cancelled: "Annulée",
-  credited: "Créditée",
-};
 
 const PAYMENT_METHOD_LABEL: Record<string, string> = {
   cash: "Espèces",
@@ -363,12 +347,25 @@ export default async function PatientDetailPage({
         <h2 className="mb-2 text-sm font-semibold text-foreground">Devis ({quotes.length})</h2>
         <ul className="flex flex-col gap-2">
           {quotes.map((quote) => (
-            <li key={quote.id} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
-              <span className="font-mono">{quote.quoteNumber}</span>
-              <span className="text-muted-foreground">{QUOTE_STATUS_LABEL[quote.status] ?? quote.status}</span>
-              <span className="font-mono">CHF {quote.total.toString()}</span>
-              {quote.status === "accepted" ? <InvoiceButton patientId={id} quoteId={quote.id} /> : null}
-            </li>
+            <QuoteRow
+              key={quote.id}
+              patientId={id}
+              quote={{
+                id: quote.id,
+                quoteNumber: quote.quoteNumber,
+                status: quote.status,
+                createdAt: quote.createdAt,
+                total: quote.total.toString(),
+                items: quote.items.map((item) => ({
+                  id: item.id,
+                  description: item.description,
+                  toothNumber: item.toothNumber,
+                  quantity: item.quantity,
+                  unitPrice: item.unitPrice.toString(),
+                  lineTotal: item.lineTotal.toString(),
+                })),
+              }}
+            />
           ))}
           {quotes.length === 0 ? (
             <li className="text-sm text-muted-foreground">
@@ -379,27 +376,89 @@ export default async function PatientDetailPage({
       </div>
     );
   } else if (tab === "facturation") {
-    const [invoices, payments] = await Promise.all([
+    const [invoices, payments, soins] = await Promise.all([
       listInvoicesForPatient(ctx, id),
       listPaymentsForPatient(ctx, id),
+      listSoinsForPatient(ctx, id),
     ]);
+    const creditNotesByInvoice = await Promise.all(
+      invoices.map((invoice) => listCreditNotesForInvoice(ctx, invoice.id)),
+    );
     const payableInvoices = invoices
       .filter((invoice) => invoice.status === "issued" || invoice.status === "partially_paid")
       .map((invoice) => ({ id: invoice.id, invoiceNumber: invoice.invoiceNumber, balance: invoice.balance.toString() }));
 
+    // ÉTAPE 8 : "Total facturé / Total payé / Reste dû" — les brouillons ne comptent pas encore
+    // comme facturé (rien n'a été émis), une facture annulée non plus.
+    const billedInvoices = invoices.filter((inv) => inv.status !== "draft" && inv.status !== "cancelled");
+    const totalBilled = billedInvoices.reduce((sum, inv) => sum + Number(inv.total), 0);
+    const totalPaid = billedInvoices.reduce((sum, inv) => sum + Number(inv.amountPaid), 0);
+    const totalDue = billedInvoices.reduce((sum, inv) => sum + Number(inv.balance), 0);
+
+    const unbilledSoins = soins
+      .filter((soin) => soin.status === "to_invoice" && soin.treatmentId)
+      .map((soin) => ({
+        treatmentId: soin.treatmentId as string,
+        description: soin.description,
+        toothNumber: soin.toothNumber,
+        performedAt: soin.performedAt,
+        amount: soin.unitPrice * soin.quantity,
+      }));
+
     tabContent = (
       <div className="flex flex-col gap-8">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-md border border-border p-3">
+            <div className="text-xs font-medium uppercase text-muted-foreground">Total facturé</div>
+            <div className="font-mono text-lg text-foreground">CHF {totalBilled.toFixed(2)}</div>
+          </div>
+          <div className="rounded-md border border-border p-3">
+            <div className="text-xs font-medium uppercase text-muted-foreground">Total payé</div>
+            <div className="font-mono text-lg text-foreground">CHF {totalPaid.toFixed(2)}</div>
+          </div>
+          <div className="rounded-md border border-border p-3">
+            <div className="text-xs font-medium uppercase text-muted-foreground">Reste dû</div>
+            <div className="font-mono text-lg text-foreground">CHF {totalDue.toFixed(2)}</div>
+          </div>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">
+            Soins réalisés non facturés ({unbilledSoins.length})
+          </h2>
+          <UnbilledSoinsForm patientId={id} soins={unbilledSoins} />
+        </div>
+
         <div>
           <h2 className="mb-2 text-sm font-semibold text-foreground">Factures ({invoices.length})</h2>
           <ul className="flex flex-col gap-2">
-            {invoices.map((invoice) => (
-              <li key={invoice.id} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm">
-                <span className="font-mono">{invoice.invoiceNumber}</span>
-                <span className="text-muted-foreground">{INVOICE_STATUS_LABEL[invoice.status] ?? invoice.status}</span>
-                <span className="font-mono">CHF {invoice.total.toString()}</span>
-                <span className="font-mono text-muted-foreground">solde CHF {invoice.balance.toString()}</span>
-                {invoice.status === "draft" ? <ValidateInvoiceButton patientId={id} invoiceId={invoice.id} /> : null}
-              </li>
+            {invoices.map((invoice, index) => (
+              <InvoiceRow
+                key={invoice.id}
+                patientId={id}
+                invoice={{
+                  id: invoice.id,
+                  invoiceNumber: invoice.invoiceNumber,
+                  status: invoice.status,
+                  createdAt: invoice.createdAt,
+                  total: invoice.total.toString(),
+                  balance: invoice.balance.toString(),
+                  items: invoice.items.map((item) => ({
+                    id: item.id,
+                    description: item.description,
+                    toothNumber: item.toothNumber,
+                    quantity: item.quantity,
+                    lineTotal: item.lineTotal.toString(),
+                  })),
+                  creditNotes: creditNotesByInvoice[index]!.map((cn) => ({
+                    id: cn.id,
+                    creditNoteNumber: cn.creditNoteNumber,
+                    amount: cn.amount.toString(),
+                    reason: cn.reason,
+                    issueDate: cn.issueDate,
+                  })),
+                }}
+              />
             ))}
             {invoices.length === 0 ? <li className="text-sm text-muted-foreground">Aucune facture.</li> : null}
           </ul>
@@ -477,21 +536,33 @@ export default async function PatientDetailPage({
       </div>
     );
   } else {
-    const [events, appointments, plans, invoices] = await Promise.all([
+    const [events, appointments, plans, invoices, soins, documents] = await Promise.all([
       getPatientTimeline(ctx, id),
       listAppointmentsForPatient(ctx, id),
       listTreatmentPlansForPatient(ctx, id),
       listInvoicesForPatient(ctx, id),
+      listSoinsForPatient(ctx, id),
+      listDocumentsForPatient(ctx, id),
     ]);
     const now = new Date();
     const nextAppointment = appointments
       .filter((a) => a.startAt >= now && a.status !== "cancelled")
       .sort((a, b) => a.startAt.getTime() - b.startAt.getTime())[0];
+    const lastConsultation = appointments
+      .filter((a) => a.startAt < now && a.status !== "cancelled" && a.status !== "no_show")
+      .sort((a, b) => b.startAt.getTime() - a.startAt.getTime())[0];
     const activePlans = plans.filter((p) => p.status !== "completed" && p.status !== "cancelled").length;
     const unpaidInvoices = invoices.filter(
       (i) => i.status === "issued" || i.status === "partially_paid" || i.status === "overdue",
     );
+    const openInvoicesTotal = unpaidInvoices.reduce((sum, i) => sum + Number(i.balance), 0);
+    // ÉTAPE 9 : "soins restant à réaliser" — tout ce qui n'a pas encore été effectué, prévu comme
+    // pas encore facturé (les deux n'ont, par définition, jamais été réalisés).
+    const remainingSoinsTotal = soins
+      .filter((s) => s.status === "planned")
+      .reduce((sum, s) => sum + s.unitPrice * s.quantity, 0);
     const recentEvents = events.slice(0, 8);
+    const recentDocuments = documents.slice(0, 5);
 
     tabContent = (
       <div className="flex flex-col gap-8">
@@ -508,6 +579,22 @@ export default async function PatientDetailPage({
           </div>
         </div>
 
+        {alerts.length > 0 ? (
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-foreground">Alertes médicales ({alerts.length})</h2>
+            <div className="flex flex-wrap gap-2">
+              {alerts.map((alert) => (
+                <span
+                  key={alert.id}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${ALERT_SEVERITY_CLASS[alert.severity] ?? "bg-muted"}`}
+                >
+                  ⚠ {alert.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-md border border-border p-3">
             <div className="text-xs font-medium uppercase text-muted-foreground">Prochain rendez-vous</div>
@@ -516,13 +603,38 @@ export default async function PatientDetailPage({
             </div>
           </div>
           <div className="rounded-md border border-border p-3">
+            <div className="text-xs font-medium uppercase text-muted-foreground">Dernière consultation</div>
+            <div className="text-sm text-foreground">
+              {lastConsultation ? formatDate(lastConsultation.startAt) : "Aucune"}
+            </div>
+          </div>
+          <div className="rounded-md border border-border p-3">
             <div className="text-xs font-medium uppercase text-muted-foreground">Plans de traitement actifs</div>
             <div className="text-sm text-foreground">{activePlans}</div>
           </div>
           <div className="rounded-md border border-border p-3">
-            <div className="text-xs font-medium uppercase text-muted-foreground">Factures impayées</div>
-            <div className="text-sm text-foreground">{unpaidInvoices.length}</div>
+            <div className="text-xs font-medium uppercase text-muted-foreground">Soins restant à réaliser</div>
+            <div className="font-mono text-sm text-foreground">CHF {remainingSoinsTotal.toFixed(2)}</div>
           </div>
+          <div className="rounded-md border border-border p-3">
+            <div className="text-xs font-medium uppercase text-muted-foreground">Factures ouvertes</div>
+            <div className="font-mono text-sm text-foreground">CHF {openInvoicesTotal.toFixed(2)}</div>
+          </div>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Documents récents</h2>
+          <ul className="flex flex-col gap-1">
+            {recentDocuments.map((doc) => (
+              <li key={doc.id} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
+                <span className="text-foreground">{doc.fileName}</span>
+                <span className="text-xs text-muted-foreground">{formatDate(doc.createdAt)}</span>
+              </li>
+            ))}
+            {recentDocuments.length === 0 ? (
+              <li className="text-sm text-muted-foreground">Aucun document.</li>
+            ) : null}
+          </ul>
         </div>
 
         <div>

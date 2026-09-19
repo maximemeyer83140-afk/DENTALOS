@@ -216,3 +216,60 @@ la Phase 0).
       fait, bloquant avant tout usage réel** (voir avertissement ci-dessus)
 - [ ] Échantillon du catalogue Tarif 222 vérifié par le cabinet contre le document officiel — **non
       fait, recommandé avant toute facturation réelle** (voir avertissement de l'addendum 2)
+
+## Addendum 3 — onglet Facturation patient (ÉTAPE 8 d'un plan en plusieurs étapes : Agenda → Fiche
+patient, sur demande explicite de l'utilisateur ; ÉTAPES 1-7 traitées dans les addenda précédents
+de PHASE_3.md, PHASE_2.md et PHASE_4.md)
+
+L'onglet Facturation listait déjà factures et paiements, mais sans agrégat patient, sans le détail
+des actes par facture, sans les avoirs (dont le repository `credit-notes.ts` existait déjà mais
+n'était jamais branché à l'UI), et sans aucun moyen de facturer un acte réalisé qui n'était jamais
+passé par un devis (`createInvoiceFromQuote` exige toujours un devis en amont).
+
+### Changements base de données
+
+Aucun. Tout le nécessaire existait déjà (`CreditNote`, `Treatment` reliés en ÉTAPE 6).
+
+### API / logique serveur
+
+- `packages/database/src/repositories/invoices.ts` :
+  - `listInvoicesForPatient` inclut désormais les lignes de chaque facture.
+  - Nouvelle fonction `createInvoiceFromTreatments` : facture directement une sélection de
+    `Treatment` réalisés et jamais encore reliés à une ligne de facture — mêmes vérifications
+    qu'une facturation par devis (tenant, jamais deux fois le même acte), sans étape de devis
+    inutile pour un acte déjà effectué.
+- `apps/web/src/app/patients/[id]/actions.ts` — `createInvoiceFromTreatmentsAction` (sélection via
+  cases à cocher), `createCreditNoteAction` (branche enfin `createCreditNote`, déjà écrit et testé
+  depuis la Phase 5 initiale mais jusqu'ici jamais appelé par aucune UI).
+
+### UI
+
+- `apps/web/src/app/patients/[id]/InvoiceRow.tsx` (nouveau) — une facture par ligne, dépliable :
+  détail des actes facturés, avoirs déjà émis, formulaire d'émission d'un nouvel avoir (facture
+  émise ou partiellement payée uniquement — jamais sur un brouillon ou une facture déjà annulée,
+  même garde que `createCreditNote` côté serveur).
+- `apps/web/src/app/patients/[id]/UnbilledSoinsForm.tsx` (nouveau) — la liste "soins réalisés non
+  facturés" de l'énoncé (statut À facturer de l'ÉTAPE 6), avec case à cocher par acte et
+  facturation groupée.
+- Trois compteurs en tête d'onglet : Total facturé / Total payé / Reste dû (somme sur les factures
+  qui ne sont ni brouillon ni annulées — un brouillon n'a rien "facturé" au sens de l'énoncé).
+
+### Permissions
+
+`invoices.create` pour facturer des soins réalisés ; `invoices.validate` pour émettre un avoir
+(même autorité que valider une facture — un avoir est aussi une décision qui modifie le solde d'une
+facture déjà émise).
+
+### Tests
+
+- `packages/database/src/repositories/invoices.test.ts` (étendu) : un acte réalisé se facture
+  directement sans être jamais passé par un devis ; impossible de facturer deux fois le même acte ;
+  refuse un id de traitement inexistant ou n'appartenant pas au patient.
+
+### Limitation connue
+
+Les compteurs Total facturé/payé/Reste dû s'appuient sur `Invoice.total`/`amountPaid`/`balance`
+(déjà maintenus à jour par `recordPayment`/`createCreditNote`), pas sur un recalcul indépendant —
+cohérent avec le principe "le serveur est la seule autorité sur l'argent" déjà en place, mais toute
+anomalie dans ces champs se répercuterait telle quelle dans le résumé. `pnpm install`/`typecheck`/
+`lint`/`test`/`build` restent bloqués dans ce bac à sable.

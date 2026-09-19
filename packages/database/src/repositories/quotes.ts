@@ -85,20 +85,49 @@ export async function createQuoteFromPlanOption(
   throw new Error("createQuoteFromPlanOption: exhausted retry attempts without a definitive result");
 }
 
-export async function listQuotesForPatient(ctx: TenantContext, patientId: string): Promise<Quote[]> {
+/** Includes each quote's lines directly — ÉTAPE 7 needs the detail ("traitements, actes, prix
+ * détaillés") available without a second round trip per quote, and a patient's quote list is
+ * small enough that this never becomes a real payload concern. */
+export async function listQuotesForPatient(ctx: TenantContext, patientId: string): Promise<QuoteWithItems[]> {
   return prisma.quote.findMany({
     where: { patientId, organizationId: ctx.organizationId, clinicId: ctx.clinicId },
+    include: { items: true },
     orderBy: { createdAt: "desc" },
   });
 }
 
+/**
+ * ÉTAPE 7 : accepter ou refuser un devis répercute la décision sur les lignes de plan de
+ * traitement dont il vient (via `QuoteItem.treatmentPlanItemId`) — "accepté" fait passer chaque
+ * ligne encore "planned" à "accepted" (le geste concret derrière "transformer les actes acceptés
+ * en plan de traitement" : les lignes sont déjà des `TreatmentPlanItem`, il n'y a rien de plus à
+ * créer, seulement leur statut à faire avancer) ; "refusé" les fait passer à "rejected". Un devis
+ * "partiellement accepté" ne cascade rien : sans un accord ligne par ligne, on ne sait pas
+ * lesquelles ont été retenues — voir la limitation notée dans PHASE_4.md.
+ */
 export async function updateQuoteStatus(ctx: TenantContext, quoteId: string, status: QuoteStatus): Promise<Quote> {
-  const result = await prisma.quote.updateMany({
-    where: { id: quoteId, organizationId: ctx.organizationId, clinicId: ctx.clinicId },
-    data: { status },
+  return prisma.$transaction(async (tx) => {
+    const quote = await tx.quote.findFirst({
+      where: { id: quoteId, organizationId: ctx.organizationId, clinicId: ctx.clinicId },
+      include: { items: true },
+    });
+    if (!quote) throw new NotFoundError(`Quote ${quoteId} not found`);
+
+    const updated = await tx.quote.update({ where: { id: quoteId }, data: { status } });
+
+    if (status === "accepted" || status === "rejected") {
+      const nextItemStatus = status === "accepted" ? "accepted" : "rejected";
+      const treatmentPlanItemIds = quote.items
+        .map((item) => item.treatmentPlanItemId)
+        .filter((itemId): itemId is string => itemId !== null);
+      if (treatmentPlanItemIds.length > 0) {
+        await tx.treatmentPlanItem.updateMany({
+          where: { id: { in: treatmentPlanItemIds }, status: "planned" },
+          data: { status: nextItemStatus },
+        });
+      }
+    }
+
+    return updated;
   });
-  if (result.count === 0) throw new NotFoundError(`Quote ${quoteId} not found`);
-  const quote = await prisma.quote.findFirst({ where: { id: quoteId } });
-  if (!quote) throw new NotFoundError(`Quote ${quoteId} not found`);
-  return quote;
 }

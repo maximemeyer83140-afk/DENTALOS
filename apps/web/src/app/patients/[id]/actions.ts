@@ -5,8 +5,10 @@ import { revalidatePath } from "next/cache";
 import {
   addAlert,
   computeTariffItemPrice,
+  createCreditNote,
   createDocumentRecord,
   createInvoiceFromQuote,
+  createInvoiceFromTreatments,
   createNote,
   createQuoteFromPlanOption,
   createTreatmentPlan,
@@ -16,16 +18,17 @@ import {
   recordToothCondition,
   updateDocument,
   updateMedicalProfile,
+  updateQuoteStatus,
   updateTreatmentPlanItemStatus,
   validateInvoice,
 } from "@dentalos/database";
-import type { DentalConditionType, TreatmentPlanItemInput } from "@dentalos/database";
+import type { DentalConditionType, QuoteStatus, TreatmentPlanItemInput } from "@dentalos/database";
 
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 import { addAlertSchema, parseMedicalProfileFormData } from "@/lib/validation/medical-profile";
 import { createNoteSchema, createTreatmentPlanSchema } from "@/lib/validation/clinical";
-import { recordPaymentSchema } from "@/lib/validation/billing";
+import { createCreditNoteSchema, recordPaymentSchema } from "@/lib/validation/billing";
 import { MAX_DOCUMENT_SIZE_BYTES, updateDocumentSchema, uploadDocumentSchema } from "@/lib/validation/documents";
 import { getStorageProvider } from "@/lib/storage";
 
@@ -187,6 +190,15 @@ export async function createInvoiceAction(patientId: string, quoteId: string): P
   revalidatePath(`/patients/${patientId}`);
 }
 
+/** ÉTAPE 7 : envoyer / accepter / partiellement accepter / refuser un devis — voir
+ * updateQuoteStatus pour la répercussion sur les lignes de plan de traitement sous-jacentes. */
+export async function updateQuoteStatusAction(patientId: string, quoteId: string, status: QuoteStatus): Promise<void> {
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "clinical.write");
+  await updateQuoteStatus(ctx, quoteId, status);
+  revalidatePath(`/patients/${patientId}`);
+}
+
 export async function validateInvoiceAction(patientId: string, invoiceId: string): Promise<void> {
   const clinicId = await getDefaultClinicId();
   const ctx = await requirePermission(clinicId, "invoices.validate");
@@ -303,4 +315,41 @@ export async function setDocumentArchivedAction(
   const ctx = await requirePermission(clinicId, "clinical.write");
   await updateDocument(ctx, documentId, { isArchived });
   revalidatePath(`/patients/${patientId}`);
+}
+
+/** ÉTAPE 8 : facture directement une sélection de soins réalisés qui ne sont jamais passés par un
+ * devis — la case à cocher de chaque ligne "à facturer" du tableau des soins pose son
+ * `treatmentId` dans ce même formulaire. */
+export async function createInvoiceFromTreatmentsAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const treatmentIds = formData.getAll("treatmentId").map(String).filter(Boolean);
+  if (treatmentIds.length === 0) return { error: "Sélectionne au moins un soin à facturer." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "invoices.create");
+  await createInvoiceFromTreatments(ctx, patientId, treatmentIds, undefined, ctx.userId);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** ÉTAPE 8 : un avoir — jamais une modification directe d'une facture déjà émise. */
+export async function createCreditNoteAction(
+  patientId: string,
+  invoiceId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = createCreditNoteSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "invoices.validate");
+  await createCreditNote(ctx, invoiceId, parsed.data.amount, parsed.data.reason, ctx.userId);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
 }
