@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { listPatients } from "@dentalos/database";
 
+import { AppNav } from "@/components/AppNav";
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 
@@ -23,6 +24,7 @@ export default async function PatientsPage({
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
+      <AppNav current="patients" />
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Patients</h1>

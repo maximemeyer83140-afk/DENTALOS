@@ -9,6 +9,7 @@ import {
   listActiveAlerts,
   listActiveTariffItems,
   listAppointmentsForPatient,
+  listCommunicationsForPatient,
   listCreditNotesForInvoice,
   listDocumentsForPatient,
   listInvoicesForPatient,
@@ -17,16 +18,20 @@ import {
   listPaymentsForPatient,
   listPractitioners,
   listQuotesForPatient,
+  listRecallsForPatient,
   listSoinsForPatient,
   listTreatmentPlansForPatient,
   SOIN_STATUS_LABEL,
 } from "@dentalos/database";
 import type { AppointmentStatus, DentalConditionType, SoinStatus } from "@dentalos/database";
 
+import { AppNav } from "@/components/AppNav";
 import { getDefaultClinicId } from "@/lib/clinic-context";
+import { COMMUNICATION_CHANNEL_LABEL } from "@/lib/recalls";
 import { requirePermission } from "@/lib/rbac";
 
 import { AlertForm } from "./AlertForm";
+import { CommunicationForm } from "./CommunicationForm";
 import { DocumentRow } from "./DocumentRow";
 import { DocumentUpload } from "./DocumentUpload";
 import { InvoiceRow } from "./InvoiceRow";
@@ -37,6 +42,8 @@ import { Odontogram } from "./Odontogram";
 import { PaymentForm } from "./PaymentForm";
 import { QuoteButton } from "./QuoteButton";
 import { QuoteRow } from "./QuoteRow";
+import { RecallForm } from "./RecallForm";
+import { RecallRow } from "./RecallRow";
 import { MarkSoinCompletedButton } from "./SoinActions";
 import { TreatmentPlanForm, type TariffItemOption } from "./TreatmentPlanForm";
 import { UnbilledSoinsForm } from "./UnbilledSoinsForm";
@@ -55,6 +62,7 @@ const TABS = [
   { id: "devis", label: "Devis" },
   { id: "facturation", label: "Facturation" },
   { id: "documents", label: "Documents" },
+  { id: "suivi", label: "Suivi" },
   { id: "rdv", label: "Rendez-vous" },
 ] as const;
 
@@ -507,6 +515,52 @@ export default async function PatientDetailPage({
         ) : null}
       </div>
     );
+  } else if (tab === "suivi") {
+    // ÉTAPE 10 : rappels de contrôle + journal des communications — le patient ne redevient
+    // jamais un "trou noir" entre deux rendez-vous (inspiré du recall ZaWin / suivi débiteurs
+    // DentaGest, appliqué ici au suivi clinique plutôt qu'au recouvrement).
+    const [recalls, communications] = await Promise.all([
+      listRecallsForPatient(ctx, id),
+      listCommunicationsForPatient(ctx, id),
+    ]);
+    tabContent = (
+      <div className="flex flex-col gap-8">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Rappels de contrôle ({recalls.length})</h2>
+          <RecallForm patientId={id} />
+          <ul className="mt-3 flex flex-col gap-2">
+            {recalls.map((recall) => (
+              <RecallRow key={recall.id} patientId={id} recall={recall} />
+            ))}
+            {recalls.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-muted-foreground">Aucun rappel planifié.</li>
+            ) : null}
+          </ul>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Journal des communications ({communications.length})</h2>
+          <CommunicationForm patientId={id} />
+          <ul className="mt-3 flex flex-col gap-2">
+            {communications.map((comm) => (
+              <li key={comm.id} className="rounded-md border border-border px-3 py-2 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-foreground">
+                    {COMMUNICATION_CHANNEL_LABEL[comm.channel] ?? comm.channel}
+                    {comm.subject ? ` · ${comm.subject}` : ""}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{formatDateTime(comm.createdAt)}</span>
+                </div>
+                {comm.content ? <p className="mt-0.5 text-xs text-muted-foreground">{comm.content}</p> : null}
+              </li>
+            ))}
+            {communications.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-muted-foreground">Aucune communication enregistrée.</li>
+            ) : null}
+          </ul>
+        </div>
+      </div>
+    );
   } else if (tab === "rdv") {
     const appointments = await listAppointmentsForPatient(ctx, id);
     tabContent = (
@@ -661,6 +715,7 @@ export default async function PatientDetailPage({
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
+      <AppNav current="patients" />
       <Link href="/patients" className="text-sm font-medium text-primary hover:underline">
         ← Retour à la liste
       </Link>

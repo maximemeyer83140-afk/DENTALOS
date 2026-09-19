@@ -27,6 +27,9 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { key: "agenda.read", category: "agenda", description: "Consulter l'agenda" },
   { key: "agenda.write", category: "agenda", description: "Créer / modifier des rendez-vous" },
   { key: "audit.read", category: "administration", description: "Consulter les journaux d'audit" },
+  { key: "recalls.read", category: "suivi", description: "Consulter les rappels de contrôle" },
+  { key: "recalls.write", category: "suivi", description: "Créer / modifier les rappels de contrôle" },
+  { key: "communications.write", category: "suivi", description: "Enregistrer des communications patient (SMS, email, appel, courrier)" },
 ];
 
 export function assertUniquePermissionKeys(permissions: PermissionDefinition[]): void {

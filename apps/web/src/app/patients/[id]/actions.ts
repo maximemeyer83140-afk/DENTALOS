@@ -11,14 +11,17 @@ import {
   createInvoiceFromTreatments,
   createNote,
   createQuoteFromPlanOption,
+  createRecall,
   createTreatmentPlan,
   finalizeNote,
   getTariffItem,
+  logCommunication,
   recordPayment,
   recordToothCondition,
   updateDocument,
   updateMedicalProfile,
   updateQuoteStatus,
+  updateRecallStatus,
   updateTreatmentPlanItemStatus,
   validateInvoice,
 } from "@dentalos/database";
@@ -30,6 +33,7 @@ import { addAlertSchema, parseMedicalProfileFormData } from "@/lib/validation/me
 import { createNoteSchema, createTreatmentPlanSchema } from "@/lib/validation/clinical";
 import { createCreditNoteSchema, recordPaymentSchema } from "@/lib/validation/billing";
 import { MAX_DOCUMENT_SIZE_BYTES, updateDocumentSchema, uploadDocumentSchema } from "@/lib/validation/documents";
+import { createRecallSchema, logCommunicationSchema, updateRecallStatusSchema } from "@/lib/validation/recalls";
 import { getStorageProvider } from "@/lib/storage";
 
 export interface ActionState {
@@ -349,6 +353,69 @@ export async function createCreditNoteAction(
   const clinicId = await getDefaultClinicId();
   const ctx = await requirePermission(clinicId, "invoices.validate");
   await createCreditNote(ctx, invoiceId, parsed.data.amount, parsed.data.reason, ctx.userId);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** ÉTAPE 10 : planifie un rappel de contrôle depuis la fiche patient — le même rappel apparaît
+ * ensuite dans le worklist clinique (/rappels). */
+export async function createRecallAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = createRecallSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "recalls.write");
+  await createRecall(ctx, {
+    patientId,
+    dueDate: new Date(parsed.data.dueDate),
+    reason: parsed.data.reason,
+    notes: parsed.data.notes,
+  });
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** Fait avancer le statut d'un rappel depuis l'onglet Suivi de la fiche patient. */
+export async function updateRecallStatusFromPatientAction(
+  patientId: string,
+  recallId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = updateRecallStatusSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "recalls.write");
+  await updateRecallStatus(ctx, recallId, parsed.data.status, parsed.data.notes);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** ÉTAPE 10 : journal manuel des communications — DentalOS n'envoie pas encore le SMS/email
+ * lui-même (voir PHASE_6.md), ceci enregistre juste qu'un contact a eu lieu. */
+export async function logCommunicationAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = logCommunicationSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "communications.write");
+  await logCommunication(
+    ctx,
+    { patientId, channel: parsed.data.channel, subject: parsed.data.subject, content: parsed.data.content },
+    ctx.userId,
+  );
 
   revalidatePath(`/patients/${patientId}`);
   return {};

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { listAppointmentTypes, listAppointmentsForRange, listPractitioners, listRooms } from "@dentalos/database";
 
+import { AppNav } from "@/components/AppNav";
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 
@@ -73,6 +74,7 @@ export default async function AgendaPage({
 
   return (
     <main className="mx-auto max-w-[1500px] px-4 py-6">
+      <AppNav current="agenda" />
       <AgendaClient
         view={view}
         anchorDate={toDateParam(anchorDate)}

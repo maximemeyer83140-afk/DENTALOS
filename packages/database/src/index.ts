@@ -36,6 +36,8 @@ export * from "./repositories/invoices";
 export * from "./repositories/payments";
 export * from "./repositories/credit-notes";
 export * from "./repositories/tariff";
+export * from "./repositories/recalls";
+export * from "./repositories/communications";
 export * from "./services/patient-timeline";
 export * from "./services/storage-provider";
 export * from "./services/appointment-conflict";
