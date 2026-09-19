@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import {
   addAlert,
   computeTariffItemPrice,
+  createConsent,
   createCreditNote,
   createDocumentRecord,
   createInvoiceFromQuote,
@@ -12,16 +13,19 @@ import {
   createNote,
   createQuoteFromPlanOption,
   createRecall,
+  createTask,
   createTreatmentPlan,
   finalizeNote,
   getTariffItem,
   logCommunication,
+  recordConsentDecision,
   recordPayment,
   recordToothCondition,
   updateDocument,
   updateMedicalProfile,
   updateQuoteStatus,
   updateRecallStatus,
+  updateTaskStatus,
   updateTreatmentPlanItemStatus,
   validateInvoice,
 } from "@dentalos/database";
@@ -33,7 +37,9 @@ import { addAlertSchema, parseMedicalProfileFormData } from "@/lib/validation/me
 import { createNoteSchema, createTreatmentPlanSchema } from "@/lib/validation/clinical";
 import { createCreditNoteSchema, recordPaymentSchema } from "@/lib/validation/billing";
 import { MAX_DOCUMENT_SIZE_BYTES, updateDocumentSchema, uploadDocumentSchema } from "@/lib/validation/documents";
+import { createConsentSchema, recordConsentDecisionSchema } from "@/lib/validation/consents";
 import { createRecallSchema, logCommunicationSchema, updateRecallStatusSchema } from "@/lib/validation/recalls";
+import { createTaskSchema, updateTaskStatusSchema } from "@/lib/validation/tasks";
 import { getStorageProvider } from "@/lib/storage";
 
 export interface ActionState {
@@ -394,6 +400,90 @@ export async function updateRecallStatusFromPatientAction(
   const clinicId = await getDefaultClinicId();
   const ctx = await requirePermission(clinicId, "recalls.write");
   await updateRecallStatus(ctx, recallId, parsed.data.status, parsed.data.notes);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** ÉTAPE 11 : demande un consentement — crée une ligne `pending` en attente de décision. */
+export async function createConsentAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = createConsentSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "consents.write");
+  await createConsent(ctx, { patientId, templateKey: parsed.data.templateKey }, ctx.userId);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** ÉTAPE 11 : enregistre la décision du patient (signé / refusé) — jamais modifiable ensuite. */
+export async function recordConsentDecisionAction(
+  patientId: string,
+  consentId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = recordConsentDecisionSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "consents.write");
+  try {
+    await recordConsentDecision(ctx, consentId, { status: parsed.data.status, signedByName: parsed.data.signedByName });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Impossible d'enregistrer la décision." };
+  }
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** ÉTAPE 11 : crée une tâche interne liée à ce patient (ex. "relancer le labo pour sa prothèse")
+ * depuis l'onglet Suivi — elle apparaît aussi dans le tableau de bord clinique /taches. */
+export async function createPatientTaskAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = createTaskSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "tasks.write");
+  await createTask(
+    ctx,
+    {
+      title: parsed.data.title,
+      patientId,
+      priority: parsed.data.priority,
+      dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : undefined,
+    },
+    ctx.userId,
+  );
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** Fait avancer le statut d'une tâche depuis l'onglet Suivi de la fiche patient. */
+export async function updateTaskStatusFromPatientAction(
+  patientId: string,
+  taskId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = updateTaskStatusSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "tasks.write");
+  await updateTaskStatus(ctx, taskId, parsed.data.status);
 
   revalidatePath(`/patients/${patientId}`);
   return {};

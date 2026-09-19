@@ -10,6 +10,7 @@ import {
   listActiveTariffItems,
   listAppointmentsForPatient,
   listCommunicationsForPatient,
+  listConsentsForPatient,
   listCreditNotesForInvoice,
   listDocumentsForPatient,
   listInvoicesForPatient,
@@ -20,6 +21,7 @@ import {
   listQuotesForPatient,
   listRecallsForPatient,
   listSoinsForPatient,
+  listTasksForPatient,
   listTreatmentPlansForPatient,
   SOIN_STATUS_LABEL,
 } from "@dentalos/database";
@@ -32,6 +34,8 @@ import { requirePermission } from "@/lib/rbac";
 
 import { AlertForm } from "./AlertForm";
 import { CommunicationForm } from "./CommunicationForm";
+import { ConsentForm } from "./ConsentForm";
+import { ConsentRow } from "./ConsentRow";
 import { DocumentRow } from "./DocumentRow";
 import { DocumentUpload } from "./DocumentUpload";
 import { InvoiceRow } from "./InvoiceRow";
@@ -39,6 +43,8 @@ import { MedicalProfileForm } from "./MedicalProfileForm";
 import { NoteForm } from "./NoteForm";
 import { FinalizeNoteButton } from "./NoteActions";
 import { Odontogram } from "./Odontogram";
+import { PatientTaskForm } from "./PatientTaskForm";
+import { PatientTaskRow } from "./PatientTaskRow";
 import { PaymentForm } from "./PaymentForm";
 import { QuoteButton } from "./QuoteButton";
 import { QuoteRow } from "./QuoteRow";
@@ -492,8 +498,22 @@ export default async function PatientDetailPage({
     const allDocuments = await listDocumentsForPatient(ctx, id, { includeArchived: true });
     const activeDocuments = allDocuments.filter((d) => !d.isArchived);
     const archivedDocuments = allDocuments.filter((d) => d.isArchived);
+    const consents = await listConsentsForPatient(ctx, id);
     tabContent = (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-8">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Consentements ({consents.length})</h2>
+          <ConsentForm patientId={id} />
+          <ul className="mt-3 flex flex-col gap-2">
+            {consents.map((consent) => (
+              <ConsentRow key={consent.id} patientId={id} consent={consent} />
+            ))}
+            {consents.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-muted-foreground">Aucun consentement demandé.</li>
+            ) : null}
+          </ul>
+        </div>
+
         <DocumentUpload patientId={id} />
         <ul className="flex flex-col gap-2">
           {activeDocuments.map((doc) => (
@@ -519,12 +539,27 @@ export default async function PatientDetailPage({
     // ÉTAPE 10 : rappels de contrôle + journal des communications — le patient ne redevient
     // jamais un "trou noir" entre deux rendez-vous (inspiré du recall ZaWin / suivi débiteurs
     // DentaGest, appliqué ici au suivi clinique plutôt qu'au recouvrement).
-    const [recalls, communications] = await Promise.all([
+    const [recalls, communications, patientTasks] = await Promise.all([
       listRecallsForPatient(ctx, id),
       listCommunicationsForPatient(ctx, id),
+      listTasksForPatient(ctx, id),
     ]);
+    const openPatientTasks = patientTasks.filter((t) => t.status !== "done" && t.status !== "cancelled");
     tabContent = (
       <div className="flex flex-col gap-8">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Tâches ({openPatientTasks.length})</h2>
+          <PatientTaskForm patientId={id} />
+          <ul className="mt-3 flex flex-col gap-2">
+            {patientTasks.map((task) => (
+              <PatientTaskRow key={task.id} patientId={id} task={task} />
+            ))}
+            {patientTasks.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-muted-foreground">Aucune tâche liée à ce patient.</li>
+            ) : null}
+          </ul>
+        </div>
+
         <div>
           <h2 className="mb-2 text-sm font-semibold text-foreground">Rappels de contrôle ({recalls.length})</h2>
           <RecallForm patientId={id} />

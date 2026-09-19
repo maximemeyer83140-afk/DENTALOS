@@ -30,6 +30,10 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { key: "recalls.read", category: "suivi", description: "Consulter les rappels de contrôle" },
   { key: "recalls.write", category: "suivi", description: "Créer / modifier les rappels de contrôle" },
   { key: "communications.write", category: "suivi", description: "Enregistrer des communications patient (SMS, email, appel, courrier)" },
+  { key: "consents.read", category: "suivi", description: "Consulter les consentements patient" },
+  { key: "consents.write", category: "suivi", description: "Créer / modifier les consentements patient" },
+  { key: "tasks.read", category: "administration", description: "Consulter les tâches internes du cabinet" },
+  { key: "tasks.write", category: "administration", description: "Créer / modifier / assigner les tâches internes" },
 ];
 
 export function assertUniquePermissionKeys(permissions: PermissionDefinition[]): void {

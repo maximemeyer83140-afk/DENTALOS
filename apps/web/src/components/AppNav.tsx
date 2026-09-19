@@ -7,6 +7,8 @@ const LINKS = [
   { id: "agenda", href: "/agenda", label: "Agenda" },
   { id: "patients", href: "/patients", label: "Patients" },
   { id: "rappels", href: "/rappels", label: "Rappels" },
+  { id: "taches", href: "/taches", label: "Tâches" },
+  { id: "statistiques", href: "/statistiques", label: "Statistiques" },
 ] as const;
 
 /**
