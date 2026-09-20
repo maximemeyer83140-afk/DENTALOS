@@ -13,6 +13,7 @@ const LINKS = [
   { id: "taches", href: "/taches", label: "Tâches" },
   { id: "statistiques", href: "/statistiques", label: "Statistiques" },
   { id: "stock", href: "/stock", label: "Stock", requires: "inventory.read" },
+  { id: "laboratoire", href: "/laboratoire", label: "Laboratoire", requires: "laboratory.read" },
   { id: "finances", href: "/finances", label: "Finances", requires: "expenses.read" },
   { id: "equipe", href: "/equipe", label: "Équipe", requires: "users.manage" },
 ] as const;

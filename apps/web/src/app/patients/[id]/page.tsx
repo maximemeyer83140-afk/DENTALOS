@@ -14,6 +14,8 @@ import {
   listCreditNotesForInvoice,
   listDocumentsForPatient,
   listInvoicesForPatient,
+  listLabCasesForPatient,
+  listLaboratories,
   listMedicalProfileRevisions,
   listNotesForPatient,
   listPaymentsForPatient,
@@ -39,6 +41,8 @@ import { ConsentRow } from "./ConsentRow";
 import { DocumentRow } from "./DocumentRow";
 import { DocumentUpload } from "./DocumentUpload";
 import { InvoiceRow } from "./InvoiceRow";
+import { LabCaseForm } from "./LabCaseForm";
+import { LabCaseRow } from "./LabCaseRow";
 import { MedicalProfileForm } from "./MedicalProfileForm";
 import { NoteForm } from "./NoteForm";
 import { FinalizeNoteButton } from "./NoteActions";
@@ -209,11 +213,13 @@ export default async function PatientDetailPage({
       </div>
     );
   } else if (tab === "clinique") {
-    const [chart, notes, practitioners, soins] = await Promise.all([
+    const [chart, notes, practitioners, soins, labCases, laboratories] = await Promise.all([
       getCurrentChart(ctx, id),
       listNotesForPatient(ctx, id),
       listPractitioners(ctx),
       listSoinsForPatient(ctx, id),
+      listLabCasesForPatient(ctx, id),
+      listLaboratories(ctx),
     ]);
     const conditions: Record<number, DentalConditionType> = {};
     for (const entry of chart?.entries ?? []) {
@@ -300,6 +306,23 @@ export default async function PatientDetailPage({
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Laboratoire ({labCases.length})</h2>
+          <LabCaseForm
+            patientId={id}
+            practitioners={practitioners.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }))}
+            laboratories={laboratories.map((l) => ({ id: l.id, name: l.name }))}
+          />
+          <ul className="mt-3 flex flex-col gap-2">
+            {labCases.map((labCase) => (
+              <LabCaseRow key={labCase.id} patientId={id} labCase={labCase} />
+            ))}
+            {labCases.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-muted-foreground">Aucun travail envoyé au laboratoire.</li>
+            ) : null}
+          </ul>
         </div>
       </div>
     );

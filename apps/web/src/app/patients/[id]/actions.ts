@@ -11,6 +11,7 @@ import {
   createInvoiceFromQuote,
   createInvoiceFromTreatments,
   createNote,
+  createLabCase,
   createQuoteFromPlanOption,
   createRecall,
   createTask,
@@ -22,6 +23,7 @@ import {
   recordPayment,
   recordToothCondition,
   updateDocument,
+  updateLabCaseStatus,
   updateMedicalProfile,
   updateQuoteStatus,
   updateRecallStatus,
@@ -38,6 +40,7 @@ import { createNoteSchema, createTreatmentPlanSchema } from "@/lib/validation/cl
 import { createCreditNoteSchema, recordPaymentSchema } from "@/lib/validation/billing";
 import { MAX_DOCUMENT_SIZE_BYTES, updateDocumentSchema, uploadDocumentSchema } from "@/lib/validation/documents";
 import { createConsentSchema, recordConsentDecisionSchema } from "@/lib/validation/consents";
+import { createLabCaseSchema, updateLabCaseStatusSchema } from "@/lib/validation/laboratory";
 import { createRecallSchema, logCommunicationSchema, updateRecallStatusSchema } from "@/lib/validation/recalls";
 import { createTaskSchema, updateTaskStatusSchema } from "@/lib/validation/tasks";
 import { getStorageProvider } from "@/lib/storage";
@@ -439,6 +442,54 @@ export async function recordConsentDecisionAction(
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Impossible d'enregistrer la décision." };
   }
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** ÉTAPE 17 : envoie un travail au laboratoire (couronne, bridge, prothèse...) depuis l'onglet
+ * Clinique — le même cas apparaît ensuite dans le worklist clinique (/laboratoire). */
+export async function createLabCaseAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = createLabCaseSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "laboratory.write");
+  try {
+    await createLabCase(ctx, {
+      patientId,
+      practitionerId: parsed.data.practitionerId,
+      laboratoryId: parsed.data.laboratoryId,
+      workType: parsed.data.workType,
+      toothNumber: parsed.data.toothNumber,
+      expectedAt: parsed.data.expectedAt ? new Date(parsed.data.expectedAt) : undefined,
+      cost: parsed.data.cost,
+    });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Impossible de créer ce cas de laboratoire." };
+  }
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** Fait avancer le statut d'un cas de laboratoire depuis l'onglet Clinique de la fiche patient. */
+export async function updateLabCaseStatusFromPatientAction(
+  patientId: string,
+  labCaseId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = updateLabCaseStatusSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "laboratory.write");
+  await updateLabCaseStatus(ctx, labCaseId, parsed.data.status);
 
   revalidatePath(`/patients/${patientId}`);
   return {};

@@ -34,6 +34,8 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { key: "consents.write", category: "suivi", description: "Créer / modifier les consentements patient" },
   { key: "tasks.read", category: "administration", description: "Consulter les tâches internes du cabinet" },
   { key: "tasks.write", category: "administration", description: "Créer / modifier / assigner les tâches internes" },
+  { key: "laboratory.read", category: "laboratory", description: "Consulter les travaux de laboratoire" },
+  { key: "laboratory.write", category: "laboratory", description: "Créer / modifier les travaux de laboratoire" },
 ];
 
 export function assertUniquePermissionKeys(permissions: PermissionDefinition[]): void {
