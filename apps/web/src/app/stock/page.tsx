@@ -33,7 +33,12 @@ export default async function StockPage(): Promise<ReactNode> {
             {items.length} article(s){lowStockCount > 0 ? ` · ${lowStockCount} sous le seuil d'alerte` : ""}
           </p>
         </div>
-        <CreateItemForm suppliers={suppliers.map((s) => ({ id: s.id, name: s.name }))} />
+        <div className="flex items-center gap-2">
+          <Link href="/stock/commandes" className="text-sm font-medium text-primary hover:underline">
+            Bons de commande →
+          </Link>
+          <CreateItemForm suppliers={suppliers.map((s) => ({ id: s.id, name: s.name }))} />
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-md border border-border">

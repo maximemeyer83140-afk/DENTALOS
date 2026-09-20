@@ -43,6 +43,7 @@ export * from "./repositories/consents";
 export * from "./repositories/users";
 export * from "./repositories/roles";
 export * from "./repositories/inventory";
+export * from "./repositories/purchase-orders";
 export * from "./repositories/tasks";
 export * from "./services/patient-timeline";
 export * from "./services/storage-provider";
