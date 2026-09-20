@@ -18,6 +18,7 @@ if (process.env.NODE_ENV !== "production") {
 export * from "@prisma/client";
 export * from "./tenant-context";
 export * from "./errors";
+export * from "./permissions";
 export * from "./repositories/practitioners";
 export * from "./repositories/patients";
 export * from "./repositories/medical-profile";
@@ -40,6 +41,7 @@ export * from "./repositories/recalls";
 export * from "./repositories/communications";
 export * from "./repositories/consents";
 export * from "./repositories/users";
+export * from "./repositories/roles";
 export * from "./repositories/tasks";
 export * from "./services/patient-timeline";
 export * from "./services/storage-provider";

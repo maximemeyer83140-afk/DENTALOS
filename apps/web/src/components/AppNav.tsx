@@ -9,21 +9,26 @@ const LINKS = [
   { id: "rappels", href: "/rappels", label: "Rappels" },
   { id: "taches", href: "/taches", label: "Tâches" },
   { id: "statistiques", href: "/statistiques", label: "Statistiques" },
+  { id: "equipe", href: "/equipe", label: "Équipe", requires: "users.manage" },
 ] as const;
 
 /**
  * Minimal cross-module navigation — until this session, Agenda / Patients / Rappels were three
  * disconnected route trees with only a single "← Retour" link back to /patients. Rendered inside
- * each top-level page rather than the root layout so the login page never shows it.
+ * each top-level page rather than the root layout so the login page never shows it. "Équipe" is
+ * hidden for anyone without `users.manage` on their first clinic — no point advertising a page
+ * `requirePermission` will refuse anyway.
  */
 export async function AppNav({ current }: { current: (typeof LINKS)[number]["id"] }): Promise<ReactNode> {
   const session = await auth();
   if (!session?.user) return null;
+  const permissions = session.user.clinics[0]?.permissions ?? [];
+  const links = LINKS.filter((link) => !("requires" in link) || permissions.includes(link.requires));
 
   return (
     <nav className="mb-6 flex items-center gap-1 border-b border-border pb-3" aria-label="Navigation principale">
       <span className="mr-3 text-sm font-semibold text-foreground">DentalOS</span>
-      {LINKS.map((link) => (
+      {links.map((link) => (
         <Link
           key={link.id}
           href={link.href}
