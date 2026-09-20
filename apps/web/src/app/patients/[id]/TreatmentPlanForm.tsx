@@ -1,8 +1,10 @@
 "use client";
 
+import type { DentalConditionType } from "@dentalos/database";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useActionState, useId, useMemo, useRef, useState } from "react";
 
+import { ToothPickerField } from "@/components/dental/ToothPickerField";
 import { TARIFF_PRESETS } from "@/lib/tariff-presets";
 
 import { createTreatmentPlanAction, type ActionState } from "./actions";
@@ -60,10 +62,12 @@ export function TreatmentPlanForm({
   patientId,
   practitioners,
   tariffItems,
+  conditions,
 }: {
   patientId: string;
   practitioners: { id: string; name: string }[];
   tariffItems: TariffItemOption[];
+  conditions?: Record<number, DentalConditionType>;
 }): ReactNode {
   const boundAction = createTreatmentPlanAction.bind(null, patientId);
   const [state, formAction, pending] = useActionState(boundAction, initialState);
@@ -321,14 +325,14 @@ export function TreatmentPlanForm({
                   <td className="py-1.5 pr-2 font-mono text-xs text-muted-foreground">{item.code}</td>
                   <td className="py-1.5 pr-2 text-foreground">{item.description}</td>
                   <td className="py-1.5 pr-2">
-                    <input
-                      type="number"
-                      min={11}
-                      max={48}
-                      value={row.toothNumber}
-                      onChange={(e) => updateRow(row.key, { toothNumber: e.target.value })}
-                      className="tp-no-print w-14 rounded-md border border-border bg-background px-1.5 py-1 text-sm text-foreground"
-                    />
+                    <span className="tp-no-print">
+                      <ToothPickerField
+                        value={row.toothNumber}
+                        onChange={(value) => updateRow(row.key, { toothNumber: value })}
+                        conditions={conditions}
+                        className="min-w-[76px] rounded-md border border-border bg-background px-1.5 py-1 text-xs text-foreground"
+                      />
+                    </span>
                     <span className="tp-print-only">{row.toothNumber || "—"}</span>
                   </td>
                   <td className="py-1.5 pr-2">

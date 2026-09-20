@@ -327,11 +327,16 @@ export default async function PatientDetailPage({
       </div>
     );
   } else if (tab === "plan") {
-    const [practitioners, plans, tariffItems] = await Promise.all([
+    const [practitioners, plans, tariffItems, chart] = await Promise.all([
       listPractitioners(ctx),
       listTreatmentPlansForPatient(ctx, id),
       listActiveTariffItems(ctx),
+      getCurrentChart(ctx, id),
     ]);
+    const planConditions: Record<number, DentalConditionType> = {};
+    for (const entry of chart?.entries ?? []) {
+      planConditions[entry.toothNumber] = entry.condition;
+    }
     const practitionerOptions = practitioners.map((p) => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }));
     const tariffOptions: TariffItemOption[] = tariffItems.map((item) => ({
       id: item.id,
@@ -374,7 +379,7 @@ export default async function PatientDetailPage({
           ))}
           {plans.length === 0 ? <li className="text-sm text-muted-foreground">Aucun plan de traitement.</li> : null}
         </ul>
-        <TreatmentPlanForm patientId={id} practitioners={practitionerOptions} tariffItems={tariffOptions} />
+        <TreatmentPlanForm patientId={id} practitioners={practitionerOptions} tariffItems={tariffOptions} conditions={planConditions} />
       </div>
     );
   } else if (tab === "devis") {

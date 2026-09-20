@@ -2,40 +2,84 @@
 
 import type { DentalConditionType } from "@dentalos/database";
 import type { ReactNode } from "react";
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
+
+import { ToothIcon } from "@/components/dental/ToothIcon";
+import {
+  CONDITION_ORDER,
+  CONDITION_STYLE,
+  LOWER_LEFT,
+  LOWER_RIGHT,
+  UPPER_LEFT,
+  UPPER_RIGHT,
+  toothVariant,
+} from "@/lib/dental-conditions";
 
 import { recordToothConditionAction } from "./actions";
 
-const UPPER_TEETH = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28];
-const LOWER_TEETH = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
+function ToothButton({
+  toothNumber,
+  condition,
+  isOpen,
+  disabled,
+  onToggle,
+}: {
+  toothNumber: number;
+  condition: DentalConditionType;
+  isOpen: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}): ReactNode {
+  const style = CONDITION_STYLE[condition];
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onToggle}
+      title={`Dent ${toothNumber} — ${style.label}`}
+      aria-expanded={isOpen}
+      className={`flex w-9 flex-col items-center gap-0.5 rounded-md border px-0.5 py-1 text-[10px] font-semibold transition disabled:opacity-60 ${
+        isOpen ? "border-primary bg-primary/5" : "border-transparent hover:bg-muted"
+      }`}
+    >
+      <ToothIcon variant={toothVariant(toothNumber)} fill={style.fill} stroke={style.stroke} dashed={style.dashed} className="h-8 w-5" />
+      <span className="text-foreground">{toothNumber}</span>
+    </button>
+  );
+}
 
-const CONDITION_CYCLE: DentalConditionType[] = ["healthy", "caries", "composite", "crown", "implant", "missing"];
-
-const CONDITION_LABEL: Record<DentalConditionType, string> = {
-  healthy: "Saine",
-  missing: "Absente",
-  caries: "Carie",
-  composite: "Composite",
-  amalgam: "Amalgame",
-  crown: "Couronne",
-  bridge: "Bridge",
-  implant: "Implant",
-  planned_extraction: "Extraction prévue",
-  endodontics: "Endodontie",
-  lesion: "Lésion",
-  veneer: "Facette",
-  inlay: "Inlay",
-  onlay: "Onlay",
-  provisional: "Provisoire",
-};
-
-const CONDITION_CLASS: Partial<Record<DentalConditionType, string>> = {
-  caries: "border-red-400 bg-red-50 text-red-700",
-  composite: "border-blue-400 bg-blue-50 text-blue-700",
-  crown: "border-primary bg-primary text-primary-foreground",
-  implant: "border-green-400 bg-green-50 text-green-700",
-  missing: "border-dashed border-muted-foreground bg-muted text-muted-foreground",
-};
+function ConditionPopover({
+  onSelect,
+  onClose,
+}: {
+  onSelect: (condition: DentalConditionType) => void;
+  onClose: () => void;
+}): ReactNode {
+  return (
+    <>
+      {/* Backdrop: closes the popover on outside click without pulling in a dependency. */}
+      <div className="fixed inset-0 z-10" onClick={onClose} aria-hidden="true" />
+      <div className="absolute left-1/2 top-full z-20 mt-1 w-64 -translate-x-1/2 rounded-md border border-border bg-background p-2 shadow-lg">
+        <div className="grid grid-cols-3 gap-1">
+          {CONDITION_ORDER.map((condition) => {
+            const style = CONDITION_STYLE[condition];
+            return (
+              <button
+                key={condition}
+                type="button"
+                onClick={() => onSelect(condition)}
+                className="flex flex-col items-center gap-1 rounded-md p-1.5 text-center hover:bg-muted"
+              >
+                <span className={`h-4 w-4 rounded-full ${style.chipClass}`} />
+                <span className="text-[10px] leading-tight text-foreground">{style.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
 
 export function Odontogram({
   patientId,
@@ -45,43 +89,61 @@ export function Odontogram({
   conditions: Record<number, DentalConditionType>;
 }): ReactNode {
   const [isPending, startTransition] = useTransition();
+  const [openTooth, setOpenTooth] = useState<number | null>(null);
 
-  function handleClick(toothNumber: number) {
-    const current = conditions[toothNumber] ?? "healthy";
-    const currentIndex = CONDITION_CYCLE.indexOf(current);
-    const next = CONDITION_CYCLE[(currentIndex + 1) % CONDITION_CYCLE.length]!;
-    startTransition(() => recordToothConditionAction(patientId, toothNumber, next));
+  function handleSelect(toothNumber: number, condition: DentalConditionType): void {
+    setOpenTooth(null);
+    startTransition(() => recordToothConditionAction(patientId, toothNumber, condition));
   }
 
-  function renderRow(teeth: number[]): ReactNode {
+  function renderQuadrant(teeth: number[]): ReactNode {
     return (
-      <div className="flex flex-wrap gap-1">
-        {teeth.map((tooth) => {
-          const condition = conditions[tooth] ?? "healthy";
-          return (
-            <button
-              key={tooth}
-              type="button"
+      <div className="flex gap-1">
+        {teeth.map((tooth) => (
+          <div key={tooth} className="relative">
+            <ToothButton
+              toothNumber={tooth}
+              condition={conditions[tooth] ?? "healthy"}
+              isOpen={openTooth === tooth}
               disabled={isPending}
-              onClick={() => handleClick(tooth)}
-              title={`Dent ${tooth} — ${CONDITION_LABEL[condition]}`}
-              className={`flex h-9 w-9 flex-col items-center justify-center rounded-md border text-[10px] font-semibold disabled:opacity-60 ${
-                CONDITION_CLASS[condition] ?? "border-border bg-background text-foreground"
-              }`}
-            >
-              {tooth}
-            </button>
-          );
-        })}
+              onToggle={() => setOpenTooth((current) => (current === tooth ? null : tooth))}
+            />
+            {openTooth === tooth ? (
+              <ConditionPopover onSelect={(condition) => handleSelect(tooth, condition)} onClose={() => setOpenTooth(null)} />
+            ) : null}
+          </div>
+        ))}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-center gap-2 rounded-md border border-border p-4">
-      {renderRow(UPPER_TEETH)}
-      {renderRow(LOWER_TEETH)}
-      <p className="mt-2 text-xs text-muted-foreground">Clique une dent pour faire évoluer son état.</p>
+    <div className="flex flex-col items-center gap-3 rounded-md border border-border p-4">
+      <div className="flex items-start gap-3">
+        {renderQuadrant(UPPER_RIGHT)}
+        <div className="mt-3 h-24 w-px bg-border" />
+        {renderQuadrant(UPPER_LEFT)}
+      </div>
+      <div className="h-px w-full max-w-md bg-border" />
+      <div className="flex items-start gap-3">
+        {renderQuadrant(LOWER_RIGHT)}
+        <div className="mt-3 h-24 w-px bg-border" />
+        {renderQuadrant(LOWER_LEFT)}
+      </div>
+
+      <p className="mt-1 text-xs text-muted-foreground">Clique une dent pour choisir son état.</p>
+
+      <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 border-t border-border pt-2">
+        {CONDITION_ORDER.map((condition) => {
+          const style = CONDITION_STYLE[condition];
+          return (
+            <span key={condition} className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <span className={`h-2.5 w-2.5 rounded-full ${style.chipClass}`} />
+              {style.label}
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 }
