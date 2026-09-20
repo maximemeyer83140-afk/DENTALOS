@@ -2,6 +2,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { auth } from "@/lib/auth";
+import { getDefaultClinicId } from "@/lib/clinic-context";
+
+import { ClinicSwitcher } from "./ClinicSwitcher";
 
 const LINKS = [
   { id: "agenda", href: "/agenda", label: "Agenda" },
@@ -17,13 +20,17 @@ const LINKS = [
  * Minimal cross-module navigation — until this session, Agenda / Patients / Rappels were three
  * disconnected route trees with only a single "← Retour" link back to /patients. Rendered inside
  * each top-level page rather than the root layout so the login page never shows it. "Équipe" is
- * hidden for anyone without `users.manage` on their first clinic — no point advertising a page
- * `requirePermission` will refuse anyway.
+ * hidden for anyone without `users.manage` on the *active* clinic — no point advertising a page
+ * `requirePermission` will refuse anyway. ÉTAPE 15 adds `ClinicSwitcher`: permissions (and so
+ * which links show) are read from the clinic the user actually has active, not always their
+ * first one.
  */
 export async function AppNav({ current }: { current: (typeof LINKS)[number]["id"] }): Promise<ReactNode> {
   const session = await auth();
   if (!session?.user) return null;
-  const permissions = session.user.clinics[0]?.permissions ?? [];
+  const activeClinicId = await getDefaultClinicId();
+  const activeClinic = session.user.clinics.find((c) => c.clinicId === activeClinicId);
+  const permissions = activeClinic?.permissions ?? [];
   const links = LINKS.filter((link) => !("requires" in link) || permissions.includes(link.requires));
 
   return (
@@ -43,6 +50,8 @@ export async function AppNav({ current }: { current: (typeof LINKS)[number]["id"
           {link.label}
         </Link>
       ))}
+      <span className="flex-grow" />
+      <ClinicSwitcher clinics={session.user.clinics.map((c) => ({ clinicId: c.clinicId, clinicName: c.clinicName }))} activeClinicId={activeClinicId} />
     </nav>
   );
 }
