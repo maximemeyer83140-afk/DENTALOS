@@ -15,6 +15,7 @@ const LINKS = [
   { id: "stock", href: "/stock", label: "Stock", requires: "inventory.read" },
   { id: "laboratoire", href: "/laboratoire", label: "Laboratoire", requires: "laboratory.read" },
   { id: "finances", href: "/finances", label: "Finances", requires: "expenses.read" },
+  { id: "remuneration", href: "/remuneration", label: "Rémunération", requires: "compensation.read" },
   { id: "equipe", href: "/equipe", label: "Équipe", requires: "users.manage" },
 ] as const;
 

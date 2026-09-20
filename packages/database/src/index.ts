@@ -46,6 +46,7 @@ export * from "./repositories/inventory";
 export * from "./repositories/purchase-orders";
 export * from "./repositories/expenses";
 export * from "./repositories/laboratories";
+export * from "./repositories/compensation";
 export * from "./repositories/tasks";
 export * from "./services/patient-timeline";
 export * from "./services/storage-provider";

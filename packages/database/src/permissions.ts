@@ -36,6 +36,8 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { key: "tasks.write", category: "administration", description: "Créer / modifier / assigner les tâches internes" },
   { key: "laboratory.read", category: "laboratory", description: "Consulter les travaux de laboratoire" },
   { key: "laboratory.write", category: "laboratory", description: "Créer / modifier les travaux de laboratoire" },
+  { key: "compensation.read", category: "compensation", description: "Consulter la rémunération des praticiens" },
+  { key: "compensation.write", category: "compensation", description: "Définir les taux de rétrocession et générer les décomptes" },
 ];
 
 export function assertUniquePermissionKeys(permissions: PermissionDefinition[]): void {
