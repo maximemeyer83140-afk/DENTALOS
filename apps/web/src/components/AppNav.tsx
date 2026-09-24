@@ -10,6 +10,7 @@ const LINKS = [
   { id: "agenda", href: "/agenda", label: "Agenda" },
   { id: "patients", href: "/patients", label: "Patients" },
   { id: "rappels", href: "/rappels", label: "Rappels" },
+  { id: "liste-attente", href: "/liste-attente", label: "Liste d'attente", requires: "agenda.read" },
   { id: "taches", href: "/taches", label: "Tâches" },
   { id: "statistiques", href: "/statistiques", label: "Statistiques" },
   { id: "stock", href: "/stock", label: "Stock", requires: "inventory.read" },

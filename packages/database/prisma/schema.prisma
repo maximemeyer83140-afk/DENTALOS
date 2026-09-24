@@ -571,8 +571,9 @@ model Appointment {
   room            Room?            @relation(fields: [roomId], references: [id], onDelete: SetNull)
   appointmentType AppointmentType? @relation(fields: [appointmentTypeId], references: [id], onDelete: SetNull)
 
-  clinicalNotes ClinicalNote[]
-  treatments    Treatment[]
+  clinicalNotes     ClinicalNote[]
+  treatments        Treatment[]
+  waitingListEntries WaitingListEntry[]
 
   @@index([organizationId])
   @@index([clinicId, startAt])
@@ -581,21 +582,26 @@ model Appointment {
   @@map("appointments")
 }
 
+/// Un patient en liste d'attente a déjà un rendez-vous fixé (`appointmentId`, obligatoire) et
+/// souhaite une place plus tôt si un autre patient annule — ce n'est jamais un vœu libre
+/// ("je veux un rendez-vous de tel type"), donc pas de appointmentTypeId/praticien/durée
+/// indépendants : ces informations se lisent sur `appointment` lui-même.
 model WaitingListEntry {
-  id                     String              @id @default(cuid())
-  organizationId         String
-  clinicId               String
-  patientId              String
-  appointmentTypeId      String?
-  preferredPractitionerId String?
-  desiredDurationMinutes Int?
-  urgency                WaitingListUrgency  @default(normal)
-  availabilityNotes      String?
-  status                 WaitingListStatus   @default(waiting)
-  createdAt              DateTime            @default(now())
-  updatedAt              DateTime            @updatedAt
+  id                String             @id @default(cuid())
+  organizationId    String
+  clinicId          String
+  patientId         String
+  appointmentId     String
+  urgency           WaitingListUrgency @default(normal)
+  availabilityNotes String?
+  status            WaitingListStatus  @default(waiting)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
 
   @@index([clinicId, status])
+  @@index([appointmentId])
   @@map("waiting_list_entries")
 }
 
