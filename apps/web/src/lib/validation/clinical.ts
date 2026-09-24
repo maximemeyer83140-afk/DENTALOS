@@ -73,3 +73,51 @@ export const createTreatmentPlanSchema = z
       lines: lines.data,
     };
   });
+
+/** Une ordonnance, comme le plan de traitement ci-dessus, sérialise ses lignes dynamiques
+ * (médicaments) en JSON plutôt qu'en champs FormData indexés — même raison : pas d'aide framework
+ * pour `items[0].medication` côté serveur ici, et le JSON garde les schémas client/serveur
+ * identiques. */
+export const prescriptionLineSchema = z.object({
+  medication: z.string().trim().min(1, "Le médicament est requis").max(200),
+  dosage: z.string().trim().min(1, "La posologie est requise").max(120),
+  duration: z.string().trim().min(1, "La durée est requise").max(60),
+});
+
+function parsePrescriptionLines(linesJson: string, ctx: z.RefinementCtx): z.infer<typeof prescriptionLineSchema>[] {
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(linesJson);
+  } catch {
+    ctx.addIssue({ code: "custom", message: "Lignes invalides" });
+    return z.NEVER;
+  }
+  const lines = z.array(prescriptionLineSchema).min(1, "Ajoute au moins un médicament").safeParse(parsedJson);
+  if (!lines.success) {
+    ctx.addIssue({ code: "custom", message: lines.error.issues[0]?.message ?? "Lignes invalides" });
+    return z.NEVER;
+  }
+  return lines.data;
+}
+
+export const createPrescriptionSchema = z
+  .object({
+    practitionerId: z.string().trim().min(1, "Le praticien est requis"),
+    notes: optionalText(2000),
+    linesJson: z.string().min(1),
+  })
+  .transform((data, ctx) => ({
+    practitionerId: data.practitionerId,
+    notes: data.notes,
+    items: parsePrescriptionLines(data.linesJson, ctx),
+  }));
+
+export const updatePrescriptionSchema = z
+  .object({
+    notes: optionalText(2000),
+    linesJson: z.string().min(1),
+  })
+  .transform((data, ctx) => ({
+    notes: data.notes,
+    items: parsePrescriptionLines(data.linesJson, ctx),
+  }));

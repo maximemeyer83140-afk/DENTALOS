@@ -12,6 +12,7 @@ import {
   createInvoiceFromTreatments,
   createNote,
   createLabCase,
+  createPrescription,
   createQuoteFromPlanOption,
   createRecall,
   createTask,
@@ -25,6 +26,7 @@ import {
   updateDocument,
   updateLabCaseStatus,
   updateMedicalProfile,
+  updatePrescription,
   updateQuoteStatus,
   updateRecallStatus,
   updateTaskStatus,
@@ -36,7 +38,7 @@ import type { DentalConditionType, QuoteStatus, TreatmentPlanItemInput } from "@
 import { getDefaultClinicId } from "@/lib/clinic-context";
 import { requirePermission } from "@/lib/rbac";
 import { addAlertSchema, parseMedicalProfileFormData } from "@/lib/validation/medical-profile";
-import { createNoteSchema, createTreatmentPlanSchema } from "@/lib/validation/clinical";
+import { createNoteSchema, createPrescriptionSchema, createTreatmentPlanSchema, updatePrescriptionSchema } from "@/lib/validation/clinical";
 import { createCreditNoteSchema, recordPaymentSchema } from "@/lib/validation/billing";
 import { MAX_DOCUMENT_SIZE_BYTES, updateDocumentSchema, uploadDocumentSchema } from "@/lib/validation/documents";
 import { createConsentSchema, recordConsentDecisionSchema } from "@/lib/validation/consents";
@@ -115,6 +117,42 @@ export async function finalizeNoteAction(patientId: string, noteId: string): Pro
   const ctx = await requirePermission(clinicId, "clinical.write");
   await finalizeNote(ctx, noteId);
   revalidatePath(`/patients/${patientId}`);
+}
+
+export async function createPrescriptionAction(
+  patientId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = createPrescriptionSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "clinical.write");
+  await createPrescription(ctx, patientId, parsed.data, ctx.userId);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
+}
+
+/** Le même formulaire sert à corriger une ordonnance existante juste avant de l'imprimer
+ * ("remplir directement sur KUSP avant impression") — pas de nouvel enregistrement, la liste de
+ * médicaments est remplacée en place (voir updatePrescription). */
+export async function updatePrescriptionAction(
+  patientId: string,
+  prescriptionId: string,
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = updatePrescriptionSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Formulaire invalide." };
+
+  const clinicId = await getDefaultClinicId();
+  const ctx = await requirePermission(clinicId, "clinical.write");
+  await updatePrescription(ctx, prescriptionId, parsed.data);
+
+  revalidatePath(`/patients/${patientId}`);
+  return {};
 }
 
 /**

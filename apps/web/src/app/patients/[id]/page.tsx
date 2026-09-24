@@ -20,6 +20,7 @@ import {
   listNotesForPatient,
   listPaymentsForPatient,
   listPractitioners,
+  listPrescriptionsForPatient,
   listQuotesForPatient,
   listRecallsForPatient,
   listSoinsForPatient,
@@ -50,6 +51,8 @@ import { Odontogram } from "./Odontogram";
 import { PatientTaskForm } from "./PatientTaskForm";
 import { PatientTaskRow } from "./PatientTaskRow";
 import { PaymentForm } from "./PaymentForm";
+import { PrescriptionForm } from "./PrescriptionForm";
+import { PrescriptionRow } from "./PrescriptionRow";
 import { QuoteButton } from "./QuoteButton";
 import { QuoteRow } from "./QuoteRow";
 import { RecallForm } from "./RecallForm";
@@ -213,9 +216,10 @@ export default async function PatientDetailPage({
       </div>
     );
   } else if (tab === "clinique") {
-    const [chart, notes, practitioners, soins, labCases, laboratories] = await Promise.all([
+    const [chart, notes, prescriptions, practitioners, soins, labCases, laboratories] = await Promise.all([
       getCurrentChart(ctx, id),
       listNotesForPatient(ctx, id),
+      listPrescriptionsForPatient(ctx, id),
       listPractitioners(ctx),
       listSoinsForPatient(ctx, id),
       listLabCasesForPatient(ctx, id),
@@ -253,6 +257,36 @@ export default async function PatientDetailPage({
             {notes.length === 0 ? <li className="text-sm text-muted-foreground">Aucune note.</li> : null}
           </ul>
           <NoteForm patientId={id} practitioners={practitionerOptions} />
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Ordonnances ({prescriptions.length})</h2>
+          <PrescriptionForm patientId={id} practitioners={practitionerOptions} />
+          <ul className="mt-3 flex flex-col gap-2">
+            {prescriptions.map((prescription) => (
+              <PrescriptionRow
+                key={prescription.id}
+                patientId={id}
+                patientName={`${patient.firstName} ${patient.lastName}`}
+                prescription={{
+                  id: prescription.id,
+                  createdAt: prescription.createdAt,
+                  practitionerName:
+                    practitionerOptions.find((p) => p.id === prescription.practitionerId)?.name ?? "—",
+                  notes: prescription.notes,
+                  items: prescription.items.map((item) => ({
+                    id: item.id,
+                    medication: item.medication,
+                    dosage: item.dosage,
+                    duration: item.duration,
+                  })),
+                }}
+              />
+            ))}
+            {prescriptions.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-muted-foreground">Aucune ordonnance.</li>
+            ) : null}
+          </ul>
         </div>
 
         <div>

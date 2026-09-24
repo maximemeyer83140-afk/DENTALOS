@@ -318,6 +318,7 @@ model Practitioner {
   treatments         Treatment[]
   quotes             Quote[]
   invoices           Invoice[]
+  prescriptions      Prescription[]
 
   @@unique([clinicId, firstName, lastName])
   @@index([organizationId])
@@ -397,6 +398,7 @@ model Patient {
   consents       Consent[]
   documents      Document[]
   labCases       LabCase[]
+  prescriptions  Prescription[]
 
   @@unique([clinicId, patientNumber])
   @@index([organizationId])
@@ -640,6 +642,42 @@ model ClinicalNoteRevision {
 
   @@index([clinicalNoteId])
   @@map("clinical_note_revisions")
+}
+
+/// Ordonnance — rédigée depuis la fiche clinique du patient. `documentId` reste un lien optionnel
+/// vers un vrai fichier numérisé/imprimé (voir Consent.documentId pour le même principe) : rien
+/// n'oblige à en avoir un, une ordonnance existe d'abord comme donnée structurée.
+model Prescription {
+  id             String   @id @default(cuid())
+  organizationId String
+  clinicId       String
+  patientId      String
+  practitionerId String
+  notes          String?
+  documentId     String?
+  createdAt      DateTime @default(now())
+  createdBy      String?
+
+  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  practitioner Practitioner       @relation(fields: [practitionerId], references: [id], onDelete: Restrict)
+  items        PrescriptionItem[]
+
+  @@index([organizationId])
+  @@index([patientId, createdAt])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id             String @id @default(cuid())
+  prescriptionId String
+  medication     String
+  dosage         String
+  duration       String
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([prescriptionId])
+  @@map("prescription_items")
 }
 
 /// One snapshot of the full-mouth dental chart as of a given date (FDI numbering). Historical

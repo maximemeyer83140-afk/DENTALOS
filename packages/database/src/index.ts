@@ -30,6 +30,7 @@ export * from "./repositories/appointments";
 export * from "./repositories/waiting-list";
 export * from "./repositories/dental-chart";
 export * from "./repositories/clinical-notes";
+export * from "./repositories/prescriptions";
 export * from "./repositories/treatment-plans";
 export * from "./repositories/treatments";
 export * from "./repositories/quotes";
